@@ -8,6 +8,8 @@ import { getDatabase, ref, set, onValue } from "https://www.gstatic.com/firebase
 const firebaseConfig = {
   apiKey: "AIzaSyDmP5Mhy9OINCQ3IiQAY9y9FuQh2OwRcRc",
   authDomain: "online-game-73f50.firebaseapp.com",
+  databaseURL: "https://online-game-73f50-default-rtdb.firebaseio.com/
+",
   projectId: "online-game-73f50",
   storageBucket: "online-game-73f50.firebasestorage.app",
   messagingSenderId: "104638669896",
