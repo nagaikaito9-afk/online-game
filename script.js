@@ -6,13 +6,12 @@ import { getDatabase, ref, set, onValue } from "https://www.gstatic.com/firebase
 // ⚠️ ここに自分のFirebaseプロジェクトの設定を貼り付けます
 // ==========================================
 const firebaseConfig = {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
-  databaseURL: "https://YOUR_PROJECT_ID-default-rtdb.firebaseio.com",
-  projectId: "YOUR_PROJECT_ID",
-  storageBucket: "YOUR_PROJECT_ID.appspot.com",
-  messagingSenderId: "YOUR_SENDER_ID",
-  appId: "YOUR_APP_ID"
+  apiKey: "AIzaSyDmP5Mhy9OINCQ3IiQAY9y9FuQh2OwRcRc",
+  authDomain: "online-game-73f50.firebaseapp.com",
+  projectId: "online-game-73f50",
+  storageBucket: "online-game-73f50.firebasestorage.app",
+  messagingSenderId: "104638669896",
+  appId: "1:104638669896:web:22ff1bd9f781bdd619e47d"
 };
 
 // Firebaseの初期化
