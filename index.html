@@ -4,223 +4,51 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>本格オンライン・マルバツゲーム</title>
-    <style>
-        body { font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background-color: #f0f2f5; }
-        .container { text-align: center; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); width: 350px; }
-        
-        /* 役職パネルのデザイン */
-        .role-panel { background: #eee; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
-        .role-panel p { margin: 0 0 10px 0; font-weight: bold; }
-        .role-btn { padding: 8px 15px; font-size: 0.9rem; cursor: pointer; border: none; border-radius: 5px; color: white; margin: 0 5px; }
-        #joinXBtn { background-color: #e74c3c; }
-        #joinXBtn:disabled { background-color: #f5b7b1; cursor: not-allowed; }
-        #joinOBtn { background-color: #3498db; }
-        #joinOBtn:disabled { background-color: #aed6f1; cursor: not-allowed; }
-
-        #status { font-size: 1.2rem; margin-bottom: 20px; font-weight: bold; height: 1.5em;}
-        
-        .board { display: grid; grid-template-columns: repeat(3, 100px); grid-template-rows: repeat(3, 100px); gap: 5px; margin: 0 auto 20px auto; background-color: #333; border: 5px solid #333; border-radius: 5px; width: fit-content; }
-        .cell { background-color: white; display: flex; justify-content: center; align-items: center; font-size: 3rem; font-weight: bold; cursor: pointer; user-select: none; transition: background-color 0.2s; }
-        .cell:hover { background-color: #f9f9f9; }
-        .cell.x { color: #e74c3c; }
-        .cell.o { color: #3498db; }
-        
-        #resetBtn { padding: 10px 20px; font-size: 1rem; cursor: pointer; background-color: #2ecc71; color: white; border: none; border-radius: 5px; }
-        #resetBtn:hover { background-color: #27ae60; }
-    </style>
+    <link rel="stylesheet" href="style.css">
 </head>
 <body>
     <div class="container">
-        <h1>オンライン・マルバツ</h1>
-        
-        <div class="role-panel">
-            <p id="myRoleDisplay">あなたの状態: 確認中...</p>
-            <button id="joinXBtn" style="display: none;">Xとして参加</button>
-            <button id="joinOBtn" style="display: none;">Oとして参加</button>
+        <div id="homeScreen" class="screen">
+            <h1>マルバツ・オンライン</h1>
+            <p class="user-info">現在のユーザー名: <span id="userNameDisplay">ゲスト</span></p>
+            <div class="menu-buttons">
+                <button id="matchingBtn" class="btn-primary">🎮 マッチング</button>
+                <button id="spectateBtn" class="btn-secondary">👁️ 観覧する</button>
+                <button id="editNameBtn" class="btn-outline">✏️ ユーザー名変更</button>
+            </div>
         </div>
 
-        <div id="status">通信中...</div>
-        <div class="board" id="board"></div>
-        <button id="resetBtn">盤面をリセット</button>
+        <div id="matchingScreen" class="screen hidden">
+            <h2>マッチング中...</h2>
+            <div class="loader"></div>
+            <p>対戦相手を探しています...</p>
+            <button id="cancelMatchBtn" class="btn-outline mt-20">キャンセル</button>
+        </div>
+
+        <div id="spectateScreen" class="screen hidden">
+            <h2>現在行われている試合</h2>
+            <div id="roomList" class="room-list">
+                </div>
+            <button id="backFromSpectateBtn" class="btn-outline mt-20">ホームに戻る</button>
+        </div>
+
+        <div id="gameScreen" class="screen hidden">
+            <div class="game-header">
+                <h2 id="matchTitle">対戦ルーム</h2>
+                <p id="myRoleDisplay">あなたの状態: 確認中...</p>
+            </div>
+            
+            <div id="status">通信中...</div>
+            <div class="board" id="board"></div>
+            
+            <div class="game-footer">
+                <button id="leaveGameBtn" class="btn-outline">退出してホームに戻る</button>
+            </div>
+        </div>
     </div>
 
     <script src="https://www.gstatic.com/firebasejs/10.8.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.1/firebase-database-compat.js"></script>
-    
-    <script>
-        // --- 1. 初期設定 ---
-        const firebaseConfig = {
-            apiKey: "AIzaSyDmP5Mhy9OINCQ3IiQAY9y9FuQh2OwRcRc",
-            authDomain: "online-game-73f50.firebaseapp.com",
-            databaseURL: "https://online-game-73f50-default-rtdb.firebaseio.com", 
-            projectId: "online-game-73f50",
-            storageBucket: "online-game-73f50.firebasestorage.app",
-            messagingSenderId: "104638669896",
-            appId: "1:104638669896:web:22ff1bd9f781bdd619e47d"
-        };
-        firebase.initializeApp(firebaseConfig);
-        const db = firebase.database();
-        
-        // 部屋を変えて過去のデータと競合しないようにする
-        const gameRef = db.ref('gameRoom_2'); 
-
-        // --- 2. プレイヤー管理の基礎 ---
-        // ブラウザを開いた人にランダムな固有IDを付与する
-        const myClientId = Math.random().toString(36).substring(2, 10);
-        let myRole = null; // "X", "O", または null（観戦者）
-
-        // DOM要素
-        const boardElement = document.getElementById('board');
-        const statusElement = document.getElementById('status');
-        const roleDisplay = document.getElementById('myRoleDisplay');
-        const joinXBtn = document.getElementById('joinXBtn');
-        const joinOBtn = document.getElementById('joinOBtn');
-        const resetBtn = document.getElementById('resetBtn');
-
-        // 勝敗パターン
-        const winPatterns = [
-            [0, 1, 2], [3, 4, 5], [6, 7, 8],
-            [0, 3, 6], [1, 4, 7], [2, 5, 8],
-            [0, 4, 8], [2, 4, 6]
-        ];
-
-        // --- 3. 役職への参加処理 ---
-        function joinGame(role) {
-            const playerSlotRef = db.ref(`gameRoom_2/players/${role}`);
-            playerSlotRef.once('value', snapshot => {
-                if (snapshot.val() === "open" || snapshot.val() === null) {
-                    // 席が空いていれば座る
-                    playerSlotRef.set(myClientId);
-                    
-                    // 【重要】ブラウザを閉じるかリロードしたら、自動的に席を「open」に戻す
-                    playerSlotRef.onDisconnect().set("open"); 
-                }
-            });
-        }
-        joinXBtn.addEventListener('click', () => joinGame('X'));
-        joinOBtn.addEventListener('click', () => joinGame('O'));
-
-        // --- 4. 役職パネルのUI更新 ---
-        function updateRoleUI(players) {
-            const p = players || { X: "open", O: "open" };
-            
-            // 自分がどの役職にいるか判定
-            if (p.X === myClientId) myRole = "X";
-            else if (p.O === myClientId) myRole = "O";
-            else myRole = null;
-
-            if (myRole) {
-                // プレイヤーの場合
-                roleDisplay.textContent = `あなたは【プレイヤー ${myRole}】です`;
-                roleDisplay.style.color = myRole === "X" ? "#e74c3c" : "#3498db";
-                joinXBtn.style.display = "none";
-                joinOBtn.style.display = "none";
-            } else {
-                // 観戦者の場合
-                roleDisplay.textContent = "あなたは【観戦者】です";
-                roleDisplay.style.color = "#333";
-                joinXBtn.style.display = "inline-block";
-                joinOBtn.style.display = "inline-block";
-                
-                // 他の人が入っているボタンは無効化
-                joinXBtn.disabled = p.X !== "open";
-                joinXBtn.textContent = p.X !== "open" ? "Xは参加中" : "Xとして参加";
-                joinOBtn.disabled = p.O !== "open";
-                joinOBtn.textContent = p.O !== "open" ? "Oは参加中" : "Oとして参加";
-            }
-        }
-
-        // --- 5. 画面の描画とクリック制限 ---
-        function renderBoard(gameState) {
-            boardElement.innerHTML = '';
-            gameState.board.forEach((cellValue, index) => {
-                const cell = document.createElement('div');
-                cell.className = 'cell ' + (cellValue ? cellValue.toLowerCase() : '');
-                cell.textContent = cellValue;
-                cell.addEventListener('click', () => handleCellClick(index, gameState));
-                boardElement.appendChild(cell);
-            });
-
-            // ステータス表示（自分の番かどうかも教える）
-            if (gameState.winner) {
-                statusElement.textContent = `🎉 プレイヤー ${gameState.winner} の勝利！`;
-                statusElement.style.color = "#27ae60";
-            } else if (gameState.isDraw) {
-                statusElement.textContent = "🤝 引き分け！";
-                statusElement.style.color = "#333";
-            } else {
-                if (myRole === gameState.currentPlayer) {
-                    statusElement.textContent = `あなたの番です！`;
-                    statusElement.style.color = "#e67e22";
-                } else {
-                    statusElement.textContent = `プレイヤー ${gameState.currentPlayer} の番です...`;
-                    statusElement.style.color = "#7f8c8d";
-                }
-            }
-        }
-
-        function handleCellClick(index, gameState) {
-            // 【新ルール】自分の役職がない、または自分の番ではない場合は弾く
-            if (myRole !== gameState.currentPlayer) return;
-
-            // 既に石がある、勝敗が決まっている場合は弾く
-            if (gameState.board[index] !== "" || gameState.winner) return;
-
-            const newBoard = [...gameState.board];
-            newBoard[index] = gameState.currentPlayer;
-
-            let newWinner = null;
-            let newIsDraw = false;
-
-            for (let pattern of winPatterns) {
-                const [a, b, c] = pattern;
-                if (newBoard[a] && newBoard[a] === newBoard[b] && newBoard[a] === newBoard[c]) {
-                    newWinner = newBoard[a];
-                    break;
-                }
-            }
-
-            if (!newWinner && !newBoard.includes("")) newIsDraw = true;
-
-            const nextPlayer = gameState.currentPlayer === "X" ? "O" : "X";
-
-            // 盤面の状態だけを更新（プレイヤー情報はそのまま）
-            gameRef.update({ 
-                board: newBoard, 
-                currentPlayer: nextPlayer, 
-                winner: newWinner, 
-                isDraw: newIsDraw 
-            });
-        }
-
-        // --- 6. データベースの監視と初期化 ---
-        gameRef.on('value', (snapshot) => {
-            const data = snapshot.val();
-            // データが完全に揃っているか確認
-            if (data && data.board && data.players) {
-                updateRoleUI(data.players);
-                renderBoard(data);
-            } else {
-                // 部屋が作られていない場合は初期化（安全な update を使用）
-                gameRef.update({
-                    board: ["", "", "", "", "", "", "", "", ""],
-                    currentPlayer: "X",
-                    winner: null,
-                    isDraw: false,
-                    players: data?.players || { X: "open", O: "open" }
-                });
-            }
-        });
-
-        // リセット処理（プレイヤーの席は奪わずに盤面だけリセットする）
-        resetBtn.addEventListener('click', () => {
-            gameRef.update({
-                board: ["", "", "", "", "", "", "", "", ""],
-                currentPlayer: "X",
-                winner: null,
-                isDraw: false
-            });
-        });
-    </script>
+    <script src="app.js"></script>
 </body>
 </html>
