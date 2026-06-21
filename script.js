@@ -86,7 +86,7 @@ document.querySelectorAll('.backToHomeBtn').forEach(btn => btn.addEventListener(
 document.getElementById('gameSelectBtn').addEventListener('click', () => switchScreen('gameSelectScreen'));
 document.getElementById('backToGameSelectBtn').addEventListener('click', () => switchScreen('gameSelectScreen'));
 
-let selectedGame = null, currentMode = null, currentRoomId = null, myRole = null, gameListener = null;
+let selectedGame = null, currentMode = null, currentRoomId = null, myRole = null, gameListener = null, chatListener = null;
 let chessEngine = null; 
 let chessSelectedSquare = null; 
 const GAME_NAMES = { tictactoe: "〇✕ゲーム", othello: "オセロ", chess: "チェス", go: "囲碁" };
@@ -113,6 +113,7 @@ document.getElementById('modeAIBtn').addEventListener('click', () => { currentMo
 
 function startLocalGame() {
     switchScreen('gameScreen');
+    document.getElementById('chatArea').classList.add('hidden'); // ローカルはチャット非表示
     document.getElementById('matchTitle').textContent = currentMode === 'ai' ? "VS コンピュータ" : "近くの人と対戦";
     myRole = (selectedGame === 'chess' || selectedGame === 'go') && currentMode === 'ai' ? 'X' : myRole; 
     let state = { board: getInitialBoard(selectedGame), currentPlayer: "X", winner: null, isDraw: false };
@@ -154,15 +155,18 @@ document.getElementById('cancelMatchBtn').addEventListener('click', () => { if (
 function leaveGame() {
     if (currentRoomId && currentMode === 'online') { 
         db.ref(`match_rooms/${currentRoomId}`).off('value', gameListener); 
+        if (chatListener) db.ref(`match_rooms/${currentRoomId}/chat`).off('value', chatListener);
         if (myRole !== "spectator") db.ref(`match_rooms/${currentRoomId}`).remove(); 
     }
-    currentRoomId = null; currentMode = null; myRole = null;
+    currentRoomId = null; currentMode = null; myRole = null; chatListener = null;
     switchScreen('gameSelectScreen');
 }
 document.getElementById('leaveGameBtn').addEventListener('click', leaveGame);
 
 function enterOnlineGame(roomId, initialRole) {
     currentRoomId = roomId; myRole = initialRole;
+    document.getElementById('chatArea').classList.remove('hidden'); // チャット表示
+
     gameListener = db.ref(`match_rooms/${roomId}`).on('value', snap => {
         const data = snap.val();
         if (!data) return leaveGame(); 
@@ -171,20 +175,52 @@ function enterOnlineGame(roomId, initialRole) {
             if (myRole === "pending") myRole = data.players[myId].role;
             if (selectedGame === 'chess' && chessEngine) chessEngine.load(data.board); 
             renderBoard(data);
-            if (data.winner === myRole && myRole !== "spectator") { userData.points[selectedGame] += 50; saveUser(); }
+            if (data.winner === myRole && myRole !== "spectator" && !data._pointsAwarded) { 
+                userData.points[selectedGame] += 50; saveUser(); 
+                db.ref(`match_rooms/${roomId}/_pointsAwarded`).set(true); // 二重付与防止
+            }
+        }
+    });
+
+    // 🌟 チャットのリアルタイム監視
+    chatListener = db.ref(`match_rooms/${roomId}/chat`).on('value', snap => {
+        const chatBox = document.getElementById('chatMessages');
+        chatBox.innerHTML = '';
+        const chats = snap.val();
+        if (chats) {
+            Object.values(chats).forEach(msg => {
+                const div = document.createElement('div');
+                div.className = 'chat-message';
+                div.innerHTML = `<strong>${msg.sender}:</strong> ${msg.text}`;
+                chatBox.appendChild(div);
+            });
+            chatBox.scrollTop = chatBox.scrollHeight;
+        } else {
+            const div = document.createElement('div');
+            div.className = 'chat-message system';
+            div.textContent = '試合が終了したため、チャット履歴は完全に削除されました。';
+            chatBox.appendChild(div);
         }
     });
 }
 
-// --- 🌟 役職名（黒・白・✕・〇）を変換する便利関数 ---
-function getPlayerName(role, gameType) {
-    if (gameType === 'othello' || gameType === 'go') {
-        return role === 'X' ? '黒' : '白';
-    } else if (gameType === 'chess') {
-        return role === 'X' ? '白' : '黒'; // チェスはX(先手)が白
-    } else {
-        return role === 'X' ? '✕' : '〇';
+// 🌟 チャット送信処理
+document.getElementById('sendChatBtn').addEventListener('click', sendChatMsg);
+document.getElementById('chatInput').addEventListener('keypress', (e) => { if(e.key === 'Enter') sendChatMsg(); });
+
+function sendChatMsg() {
+    const text = document.getElementById('chatInput').value.trim();
+    if (text && currentRoomId && currentMode === 'online') {
+        db.ref(`match_rooms/${currentRoomId}/chat`).push({ sender: userData.name, text: text });
+        document.getElementById('chatInput').value = '';
     }
+}
+
+// --- 役職名（黒・白・✕・〇）を変換 ---
+function getPlayerName(role, gameType) {
+    if (gameType === 'othello' || gameType === 'go') return role === 'X' ? '黒' : '白';
+    else if (gameType === 'chess') return role === 'X' ? '白' : '黒'; 
+    else return role === 'X' ? '✕' : '〇';
 }
 
 // --- 描画エンジン ---
@@ -245,34 +281,28 @@ function renderBoard(gameState) {
         });
     }
 
-    // 🌟 修正ポイント：勝者やターンの表示を、ゲームに合わせた名前に変換
     const st = document.getElementById('status');
     if (gameState.winner) {
-        const winnerName = getPlayerName(gameState.winner, selectedGame);
-        st.textContent = `🎉 【 ${winnerName} 】 の勝利！`;
+        st.textContent = `🎉 【 ${getPlayerName(gameState.winner, selectedGame)} 】 の勝利！`;
+        document.getElementById('chatInput').disabled = true; // 終了時は入力不可
     } else if (gameState.isDraw) {
         st.textContent = "🤝 引き分け！";
+        document.getElementById('chatInput').disabled = true;
     } else {
+        document.getElementById('chatInput').disabled = false;
         if (currentMode === 'local') {
-            const turnName = getPlayerName(gameState.currentPlayer, selectedGame);
-            st.textContent = `【 ${turnName} 】の番です`;
+            st.textContent = `【 ${getPlayerName(gameState.currentPlayer, selectedGame)} 】の番です`;
         } else {
             st.textContent = isMyTurn ? "あなたの番です" : "相手の番です";
         }
     }
 
-    // 🌟 修正ポイント：「あなたの状態」で、自分が何色なのか分かりやすく表示
     const roleDisplay = document.getElementById('myRoleDisplay');
-    if (currentMode === 'local') {
-        roleDisplay.textContent = "ローカル対戦（交代で操作）";
-    } else if (currentMode === 'ai') {
-        roleDisplay.textContent = `VS コンピュータ (あなたは 【 ${getPlayerName('X', selectedGame)} 】)`;
-    } else {
-        if (myRole === 'spectator' || !myRole || myRole === 'pending') {
-            roleDisplay.textContent = "観戦中 / 待機中";
-        } else {
-            roleDisplay.textContent = `オンライン対戦 (あなたは 【 ${getPlayerName(myRole, selectedGame)} 】)`;
-        }
+    if (currentMode === 'local') roleDisplay.textContent = "ローカル対戦（交代で操作）";
+    else if (currentMode === 'ai') roleDisplay.textContent = `VS コンピュータ (あなたは 【 ${getPlayerName('X', selectedGame)} 】)`;
+    else {
+        if (myRole === 'spectator' || !myRole || myRole === 'pending') roleDisplay.textContent = "観戦中 / 待機中";
+        else roleDisplay.textContent = `オンライン対戦 (あなたは 【 ${getPlayerName(myRole, selectedGame)} 】)`;
     }
 }
 
@@ -296,11 +326,8 @@ function handleChessClick(square, gameState) {
             syncGameState(gameState, chessEngine.fen());
         } else {
             const piece = chessEngine.get(square);
-            if (piece && piece.color === chessEngine.turn()) {
-                chessSelectedSquare = square;
-            } else {
-                chessSelectedSquare = null; 
-            }
+            if (piece && piece.color === chessEngine.turn()) chessSelectedSquare = square;
+            else chessSelectedSquare = null; 
             renderBoard(gameState);
         }
     }
@@ -359,6 +386,11 @@ function syncGameState(gameState, newBoardData) {
         winner: gameState.winner || null,
         isDraw: gameState.isDraw || false
     };
+
+    // 🌟 修正ポイント：試合が終わったらチャット履歴を完全消去
+    if (gameState.winner || gameState.isDraw) {
+        updateData.chat = null; 
+    }
 
     if (currentMode === 'online') {
         db.ref(`match_rooms/${currentRoomId}`).update(updateData);

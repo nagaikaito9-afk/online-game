@@ -60,7 +60,7 @@
         <div id="matchingScreen" class="screen hidden">
             <h2>マッチング中...</h2>
             <div class="loader"></div>
-            <p>同ランク帯の対戦相手を探しています...</p>
+            <p>対戦相手を探しています...</p>
             <button id="cancelMatchBtn" class="btn-outline mt-20">キャンセル</button>
         </div>
 
@@ -77,8 +77,17 @@
             </div>
             <div id="status">通信中...</div>
             <div class="board" id="board"></div>
+
+            <div id="chatArea" class="chat-area hidden">
+                <div id="chatMessages" class="chat-messages"></div>
+                <div class="chat-input-area">
+                    <input type="text" id="chatInput" placeholder="メッセージを入力 (終了時に消去されます)">
+                    <button id="sendChatBtn" class="btn-primary btn-small">送信</button>
+                </div>
+            </div>
+            
             <div class="game-footer">
-                <button id="leaveGameBtn" class="btn-outline">ゲームセレクトに戻る</button>
+                <button id="leaveGameBtn" class="btn-outline mt-20">退出して戻る</button>
             </div>
         </div>
     </div>
