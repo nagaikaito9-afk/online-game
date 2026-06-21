@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>本格オンラインボードゲーム</title>
     <link rel="stylesheet" href="style.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
 </head>
 <body>
     <div class="container">
@@ -17,6 +18,7 @@
             <div class="menu-buttons">
                 <button id="gameSelectBtn" class="btn-primary">🎮 ゲームセレクト</button>
                 <button id="spectateBtn" class="btn-secondary">👁️ 観覧する</button>
+                <button id="settingsBtn" class="btn-outline">⚙️ 設定</button>
             </div>
         </div>
 
@@ -24,16 +26,16 @@
             <h2>ゲームを選択</h2>
             <div class="game-list">
                 <button class="btn-game" data-game="tictactoe">
-                    〇✕ゲーム<br><span class="rank-display" id="rank-tictactoe">ランク: 確認中</span>
-                </button>
-                <button class="btn-game" data-game="chess">
-                    チェス<br><span class="rank-display" id="rank-chess">ランク: 確認中</span>
-                </button>
-                <button class="btn-game" data-game="go">
-                    囲碁<br><span class="rank-display" id="rank-go">ランク: 確認中</span>
+                    〇✕ゲーム<br><span class="rank-display" id="rank-tictactoe"></span>
                 </button>
                 <button class="btn-game" data-game="othello">
-                    オセロ<br><span class="rank-display" id="rank-othello">ランク: 確認中</span>
+                    オセロ<br><span class="rank-display" id="rank-othello"></span>
+                </button>
+                <button class="btn-game" data-game="chess">
+                    チェス<br><span class="rank-display" id="rank-chess"></span>
+                </button>
+                <button class="btn-game" data-game="go">
+                    囲碁 (9路盤)<br><span class="rank-display" id="rank-go"></span>
                 </button>
             </div>
             <button class="btn-outline mt-20 backToHomeBtn">ホームに戻る</button>
@@ -47,13 +49,13 @@
                 <button id="modeOnlineBtn" class="btn-secondary">オンラインで対戦</button>
                 <button id="modeAIBtn" class="btn-outline" style="border-color: #9b59b6; color: #9b59b6;">AIと対戦</button>
             </div>
-            <button class="btn-outline mt-20" id="backToGameSelectBtn">戻る</button>
+            <button class="btn-outline mt-20" id="backToGameSelectBtn">ゲーム選択に戻る</button>
         </div>
 
         <div id="matchingScreen" class="screen hidden">
             <h2>マッチング中...</h2>
             <div class="loader"></div>
-            <p>同ランク帯の対戦相手を探しています...</p>
+            <p>対戦相手を探しています...</p>
             <button id="cancelMatchBtn" class="btn-outline mt-20">キャンセル</button>
         </div>
 
@@ -68,12 +70,10 @@
                 <h2 id="matchTitle">対戦ルーム</h2>
                 <p id="myRoleDisplay">あなたの状態: 確認中...</p>
             </div>
-            
             <div id="status">通信中...</div>
             <div class="board" id="board"></div>
-            
             <div class="game-footer">
-                <button id="leaveGameBtn" class="btn-outline">退出して終了</button>
+                <button id="leaveGameBtn" class="btn-outline">ゲームセレクトに戻る</button>
             </div>
         </div>
     </div>
@@ -85,6 +85,22 @@
             <div class="modal-buttons">
                 <button id="saveNameBtn" class="btn-primary">保存</button>
                 <button id="cancelNameBtn" class="btn-outline">キャンセル</button>
+            </div>
+        </div>
+    </div>
+    <div id="settingsModal" class="modal hidden">
+        <div class="modal-content">
+            <h3>設定</h3>
+            <div class="setting-item">
+                <label>BGM音量:</label>
+                <input type="range" id="bgmVolumeSlider" min="0" max="1" step="0.1" value="0.3">
+            </div>
+            <div class="setting-item mt-20">
+                <label>効果音音量:</label>
+                <input type="range" id="seVolumeSlider" min="0" max="1" step="0.1" value="0.5">
+            </div>
+            <div class="modal-buttons mt-20">
+                <button id="closeSettingsBtn" class="btn-primary">閉じる</button>
             </div>
         </div>
     </div>

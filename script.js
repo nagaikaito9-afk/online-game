@@ -1,168 +1,139 @@
-// --- 1. Firebaseの初期設定 ---
+// --- Firebase初期設定 ---
 const firebaseConfig = {
     apiKey: "AIzaSyDmP5Mhy9OINCQ3IiQAY9y9FuQh2OwRcRc",
     authDomain: "online-game-73f50.firebaseapp.com",
     databaseURL: "https://online-game-73f50-default-rtdb.firebaseio.com", 
-    projectId: "online-game-73f50",
-    storageBucket: "online-game-73f50.firebasestorage.app",
-    messagingSenderId: "104638669896",
-    appId: "1:104638669896:web:22ff1bd9f781bdd619e47d"
+    projectId: "online-game-73f50"
 };
 firebase.initializeApp(firebaseConfig);
 const db = firebase.database();
 const roomsRef = db.ref('match_rooms');
 
-// --- 2. ランクシステムとユーザー管理 ---
-const RANKS = [
-    "ブロンズ I", "ブロンズ II", "ブロンズ III",
-    "シルバー I", "シルバー II", "シルバー III",
-    "ゴールド I", "ゴールド II", "ゴールド III",
-    "プラチナ I", "プラチナ II", "プラチナ III",
-    "ダイアモンド I", "ダイアモンド II", "ダイアモンド III",
-    "マスター I", "マスター II", "マスター III", "マスター IV", "マスター V"
-];
-const POINTS_PER_RANK = 100;
+// --- サウンド管理 ---
+let audioCtx = null;
+let bgmVolume = parseFloat(localStorage.getItem('bgmVol') || "0.2");
+let seVolume = parseFloat(localStorage.getItem('seVol') || "0.5");
+let bgmInterval = null;
 
-// 初期データ構造
+function initAudio() {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    if (!bgmInterval) {
+        const notes = [261.6, 293.7, 329.6, 392.0, 440.0];
+        bgmInterval = setInterval(() => {
+            if (bgmVolume <= 0) return;
+            const osc = audioCtx.createOscillator(); const gain = audioCtx.createGain();
+            osc.connect(gain); gain.connect(audioCtx.destination);
+            osc.frequency.value = notes[Math.floor(Math.random() * notes.length)] / (Math.random() > 0.5 ? 2 : 1);
+            gain.gain.setValueAtTime(bgmVolume * 0.1, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+            osc.start(); osc.stop(audioCtx.currentTime + 0.3);
+        }, 600);
+    }
+}
+
+function playSE(type) {
+    if (!audioCtx || seVolume <= 0) return;
+    const osc = audioCtx.createOscillator(); const gain = audioCtx.createGain();
+    osc.connect(gain); gain.connect(audioCtx.destination);
+    const t = audioCtx.currentTime;
+    if (type === 'put') {
+        osc.type = 'square'; osc.frequency.setValueAtTime(400, t); osc.frequency.exponentialRampToValueAtTime(600, t + 0.1);
+        gain.gain.setValueAtTime(seVolume, t); gain.gain.linearRampToValueAtTime(0, t + 0.1);
+        osc.start(t); osc.stop(t + 0.1);
+    }
+}
+document.body.addEventListener('click', initAudio, { once: true });
+
+// --- ランク・ユーザー管理 ---
+const RANKS = ["ブロンズ I", "ブロンズ II", "ブロンズ III", "シルバー I", "シルバー II", "シルバー III", "ゴールド I", "ゴールド II", "ゴールド III", "プラチナ I", "プラチナ II", "プラチナ III", "ダイアモンド I", "ダイアモンド II", "ダイアモンド III", "マスター I", "マスター II", "マスター III", "マスター IV", "マスター V"];
 let userData = JSON.parse(localStorage.getItem('boardGameUser')) || {
-    id: Math.random().toString(36).substring(2, 10),
-    name: "ゲスト" + Math.floor(Math.random() * 1000),
-    points: { tictactoe: 0, chess: 0, go: 0, othello: 0 }
+    id: Math.random().toString(36).substring(2, 10), name: "ゲスト" + Math.floor(Math.random() * 1000),
+    points: { tictactoe: 0, othello: 0, chess: 0, go: 0 }
 };
 const myId = userData.id;
 
-function getRankData(pts) {
-    let index = Math.floor(pts / POINTS_PER_RANK);
-    if (index >= RANKS.length) index = RANKS.length - 1;
-    return { name: RANKS[index], index: index };
-}
-
-function saveUser() {
-    localStorage.setItem('boardGameUser', JSON.stringify(userData));
-    updateUI();
-}
-
+function getRank(pts) { return { name: RANKS[Math.min(Math.floor(pts / 100), 19)], index: Math.min(Math.floor(pts / 100), 19) }; }
+function saveUser() { localStorage.setItem('boardGameUser', JSON.stringify(userData)); updateUI(); }
 function updateUI() {
     document.getElementById('userNameDisplay').textContent = userData.name;
-    ['tictactoe', 'chess', 'go', 'othello'].forEach(game => {
-        const rank = getRankData(userData.points[game]).name;
-        document.getElementById(`rank-${game}`).textContent = `ランク: ${rank}`;
-    });
+    ['tictactoe', 'othello', 'chess', 'go'].forEach(g => { document.getElementById(`rank-${g}`).textContent = `ランク: ${getRank(userData.points[g] || 0).name}`; });
 }
 updateUI();
 
-// --- 3. 状態管理変数 ---
-let selectedGame = null; // 選んだゲーム種類
-let currentMode = null;  // 'local', 'online', 'ai', 'spectate'
-let currentRoomId = null;
-let myRole = null; 
-let gameListener = null; 
-let localGameState = null; // ローカル/AI用の一時データ
-
-const GAME_NAMES = { tictactoe: "〇✕ゲーム", chess: "チェス", go: "囲碁", othello: "オセロ" };
-const winPatterns = [[0,1,2], [3,4,5], [6,7,8], [0,3,6], [1,4,7], [2,5,8], [0,4,8], [2,4,6]];
-
-// --- 4. 画面遷移とUI制御 ---
+// --- 画面遷移・モーダル ---
 function switchScreen(screenId) {
     document.querySelectorAll('.screen').forEach(el => el.classList.add('hidden'));
     document.getElementById(screenId).classList.remove('hidden');
 }
 
-// 名前変更モーダル制御
-document.getElementById('openNameModalBtn').addEventListener('click', () => {
-    document.getElementById('nameInput').value = userData.name;
-    document.getElementById('nameModal').classList.remove('hidden');
+document.getElementById('settingsBtn').addEventListener('click', () => {
+    document.getElementById('bgmVolumeSlider').value = bgmVolume; document.getElementById('seVolumeSlider').value = seVolume;
+    document.getElementById('settingsModal').classList.remove('hidden');
 });
-document.getElementById('cancelNameBtn').addEventListener('click', () => {
-    document.getElementById('nameModal').classList.add('hidden');
-});
-document.getElementById('saveNameBtn').addEventListener('click', () => {
-    const newName = document.getElementById('nameInput').value.trim();
-    if (newName) { userData.name = newName; saveUser(); }
-    document.getElementById('nameModal').classList.add('hidden');
-});
-
-// ホームボタン類
-document.querySelectorAll('.backToHomeBtn').forEach(btn => {
-    btn.addEventListener('click', () => switchScreen('homeScreen'));
-});
+document.getElementById('bgmVolumeSlider').addEventListener('input', (e) => { bgmVolume = parseFloat(e.target.value); localStorage.setItem('bgmVol', bgmVolume); });
+document.getElementById('seVolumeSlider').addEventListener('input', (e) => { seVolume = parseFloat(e.target.value); localStorage.setItem('seVol', seVolume); });
+document.getElementById('closeSettingsBtn').addEventListener('click', () => document.getElementById('settingsModal').classList.add('hidden'));
+document.getElementById('openNameModalBtn').addEventListener('click', () => { document.getElementById('nameInput').value = userData.name; document.getElementById('nameModal').classList.remove('hidden'); });
+document.getElementById('saveNameBtn').addEventListener('click', () => { const newName = document.getElementById('nameInput').value.trim(); if (newName) { userData.name = newName; saveUser(); } document.getElementById('nameModal').classList.add('hidden'); });
+document.getElementById('cancelNameBtn').addEventListener('click', () => document.getElementById('nameModal').classList.add('hidden'));
+document.querySelectorAll('.backToHomeBtn').forEach(btn => btn.addEventListener('click', () => switchScreen('homeScreen')));
 document.getElementById('gameSelectBtn').addEventListener('click', () => switchScreen('gameSelectScreen'));
+document.getElementById('backToGameSelectBtn').addEventListener('click', () => switchScreen('gameSelectScreen'));
 
-// ゲーム選択
+let selectedGame = null, currentMode = null, currentRoomId = null, myRole = null, gameListener = null;
+let chessEngine = null; // チェス用モジュールインスタンス
+let chessSelectedSquare = null; // チェス用選択中マス
+const GAME_NAMES = { tictactoe: "〇✕ゲーム", othello: "オセロ", chess: "チェス", go: "囲碁" };
+
 document.querySelectorAll('.btn-game').forEach(btn => {
     btn.addEventListener('click', (e) => {
         selectedGame = e.currentTarget.dataset.game;
         document.getElementById('selectedGameTitle').textContent = GAME_NAMES[selectedGame];
-        const rank = getRankData(userData.points[selectedGame]).name;
-        document.getElementById('currentRankDisplay').textContent = `現在: ${rank}`;
+        document.getElementById('currentRankDisplay').textContent = `現在: ${getRank(userData.points[selectedGame] || 0).name}`;
         switchScreen('modeSelectScreen');
     });
 });
-document.getElementById('backToGameSelectBtn').addEventListener('click', () => switchScreen('gameSelectScreen'));
 
-// --- 5. ゲーム開始ルーチン ---
+// --- ゲーム初期化と同期設定 ---
+function getInitialBoard(type) {
+    if (type === 'tictactoe') return Array(9).fill("");
+    if (type === 'othello') { let b = Array(64).fill(""); b[27]="O"; b[28]="X"; b[35]="X"; b[36]="O"; return b; }
+    if (type === 'chess') { chessEngine = new Chess(); chessSelectedSquare = null; return chessEngine.fen(); } // モジュールからFEN（盤面文字列）取得
+    if (type === 'go') return Array(81).fill("");
+}
 
-// ① 近くの人と対戦 (Local)
-document.getElementById('modeLocalBtn').addEventListener('click', () => {
-    if (selectedGame !== 'tictactoe') return alert("現在は〇✕ゲームのみプレイ可能です");
-    currentMode = 'local';
-    myRole = 'local'; // 1人で両方操作可能
-    startLocalGame();
-});
+document.getElementById('modeLocalBtn').addEventListener('click', () => { currentMode = 'local'; myRole = 'local'; startLocalGame(); });
+document.getElementById('modeAIBtn').addEventListener('click', () => { currentMode = 'ai'; myRole = 'w'; startLocalGame(); }); // チェス用のため 'X' ではなく 'w'/'b' または 'X'/'O' としますが、内部で変換します
 
-// ② AIと対戦 (AI)
-document.getElementById('modeAIBtn').addEventListener('click', () => {
-    if (selectedGame !== 'tictactoe') return alert("現在は〇✕ゲームのみプレイ可能です");
-    currentMode = 'ai';
-    myRole = 'X'; // 自分はX固定
-    startLocalGame();
-});
+function startLocalGame() {
+    switchScreen('gameScreen');
+    document.getElementById('matchTitle').textContent = currentMode === 'ai' ? "VS コンピュータ" : "近くの人と対戦";
+    myRole = (selectedGame === 'chess' || selectedGame === 'go') && currentMode === 'ai' ? 'X' : myRole; // X=先手(白/黒)
+    let state = { board: getInitialBoard(selectedGame), currentPlayer: "X", winner: null, isDraw: false };
+    renderBoard(state);
+}
 
-// ③ オンラインで対戦 (Online)
+// オンライン処理 (省略せず記述)
 document.getElementById('modeOnlineBtn').addEventListener('click', () => {
-    if (selectedGame !== 'tictactoe') return alert("現在は〇✕ゲームのみプレイ可能です");
-    currentMode = 'online';
-    switchScreen('matchingScreen');
-    const myRankData = getRankData(userData.points[selectedGame]);
-
-    // ランクが近い（±1）待機部屋を探す
+    currentMode = 'online'; switchScreen('matchingScreen');
+    const myRank = getRank(userData.points[selectedGame]||0).index;
     roomsRef.orderByChild('status').equalTo('waiting').once('value', snapshot => {
-        const rooms = snapshot.val();
-        let matchedRoomId = null;
-
-        if (rooms) {
-            for (let id in rooms) {
-                const r = rooms[id];
-                // 同じゲームで、かつランクが近い部屋を探す
-                if (r.gameType === selectedGame && Math.abs(r.hostRankIndex - myRankData.index) <= 1) {
-                    matchedRoomId = id;
-                    break;
-                }
-            }
-        }
-
-        if (matchedRoomId) {
-            // マッチング成功
-            const p1Id = Object.keys(rooms[matchedRoomId].players)[0];
+        const rooms = snapshot.val(); let matchedId = null;
+        if (rooms) { for (let id in rooms) { if (rooms[id].gameType === selectedGame && Math.abs(rooms[id].hostRankIndex - myRank) <= 1) { matchedId = id; break; } } }
+        if (matchedId) {
+            const p1Id = Object.keys(rooms[matchedId].players)[0];
             const myAssignedRole = Math.random() < 0.5 ? "X" : "O";
-            const p1Role = myAssignedRole === "X" ? "O" : "X";
-
-            db.ref(`match_rooms/${matchedRoomId}/players/${p1Id}/role`).set(p1Role);
-            db.ref(`match_rooms/${matchedRoomId}/players/${myId}`).set({ name: userData.name, role: myAssignedRole });
-            db.ref(`match_rooms/${matchedRoomId}/status`).set('playing');
-            enterOnlineGame(matchedRoomId, myAssignedRole);
+            db.ref(`match_rooms/${matchedId}/players/${p1Id}/role`).set(myAssignedRole === "X" ? "O" : "X");
+            db.ref(`match_rooms/${matchedId}/players/${myId}`).set({ name: userData.name, role: myAssignedRole });
+            db.ref(`match_rooms/${matchedId}/status`).set('playing');
+            enterOnlineGame(matchedId, myAssignedRole);
         } else {
-            // 部屋を作る
             const newRoomRef = roomsRef.push();
             currentRoomId = newRoomRef.key;
             newRoomRef.set({
-                gameType: selectedGame,
-                status: 'waiting',
-                hostRankIndex: myRankData.index,
-                board: ["", "", "", "", "", "", "", "", ""],
-                currentPlayer: "X",
-                winner: null,
-                isDraw: false,
+                gameType: selectedGame, status: 'waiting', hostRankIndex: myRank,
+                board: getInitialBoard(selectedGame), currentPlayer: "X", winner: null, isDraw: false,
                 players: { [myId]: { name: userData.name, role: "pending" } }
             });
             newRoomRef.onDisconnect().remove();
@@ -170,180 +141,231 @@ document.getElementById('modeOnlineBtn').addEventListener('click', () => {
         }
     });
 });
-
-document.getElementById('cancelMatchBtn').addEventListener('click', () => {
-    if (currentRoomId) db.ref(`match_rooms/${currentRoomId}`).remove();
-    currentRoomId = null;
-    switchScreen('modeSelectScreen');
-});
-
-// --- 6. ゲーム描画・進行処理 ---
-
-function startLocalGame() {
-    switchScreen('gameScreen');
-    document.getElementById('matchTitle').textContent = currentMode === 'ai' ? "VS コンピュータ" : "近くの人と対戦";
-    document.getElementById('myRoleDisplay').textContent = "ローカルプレイ中";
-    
-    localGameState = { board: ["", "", "", "", "", "", "", "", ""], currentPlayer: "X", winner: null, isDraw: false };
-    renderBoard(localGameState);
-}
+document.getElementById('cancelMatchBtn').addEventListener('click', () => { if (currentRoomId) db.ref(`match_rooms/${currentRoomId}`).remove(); switchScreen('modeSelectScreen'); });
 
 function enterOnlineGame(roomId, initialRole) {
-    currentRoomId = roomId;
-    myRole = initialRole;
-    gameListener = db.ref(`match_rooms/${roomId}`).on('value', snapshot => {
-        const data = snapshot.val();
-        if (!data) {
-            alert("対戦相手が退出しました");
-            return leaveGame();
-        }
+    currentRoomId = roomId; myRole = initialRole;
+    gameListener = db.ref(`match_rooms/${roomId}`).on('value', snap => {
+        const data = snap.val();
+        if (!data) return leaveGame();
         if (data.status === 'playing') {
             switchScreen('gameScreen');
             if (myRole === "pending") myRole = data.players[myId].role;
-            
-            const players = Object.values(data.players);
-            if (players.length >= 2) document.getElementById('matchTitle').textContent = `${players[0].name} VS ${players[1].name}`;
-            
-            const roleTxt = myRole === "spectator" ? "観戦中" : `プレイヤー ${myRole}`;
-            document.getElementById('myRoleDisplay').textContent = `オンライン: ${roleTxt}`;
+            if (selectedGame === 'chess' && chessEngine) chessEngine.load(data.board); // FEN同期
             renderBoard(data);
-
-            // 勝敗がついた時、自分がプレイヤーならポイント付与
-            if ((data.winner === myRole) && myRole !== "spectator") {
-                addPoints();
-            }
+            if (data.winner === myRole && myRole !== "spectator") { userData.points[selectedGame] += 50; saveUser(); }
         }
     });
 }
+
+// --- 描画エンジン ---
+const chessPieces = { 'p':'♟', 'n':'♞', 'b':'♝', 'r':'♜', 'q':'♛', 'k':'♚', 'P':'♙', 'N':'♘', 'B':'♗', 'R':'♖', 'Q':'♕', 'K':'♔' };
 
 function renderBoard(gameState) {
     const boardElement = document.getElementById('board');
-    const statusElement = document.getElementById('status');
+    boardElement.className = `board ${selectedGame}`;
     boardElement.innerHTML = '';
-
-    gameState.board.forEach((cellValue, index) => {
-        const cell = document.createElement('div');
-        cell.className = 'cell ' + (cellValue ? cellValue.toLowerCase() : '');
-        cell.textContent = cellValue;
-        cell.addEventListener('click', () => handleCellClick(index, gameState));
-        boardElement.appendChild(cell);
-    });
-
-    if (gameState.winner) {
-        statusElement.textContent = `🎉 ${gameState.winner} の勝利！`;
-    } else if (gameState.isDraw) {
-        statusElement.textContent = "🤝 引き分け！";
+    
+    if (selectedGame === 'chess') {
+        const board2D = chessEngine.board(); // 8x8配列を取得
+        for (let r = 0; r < 8; r++) {
+            for (let c = 0; c < 8; c++) {
+                const cell = document.createElement('div');
+                const squareName = String.fromCharCode(97 + c) + (8 - r); // "a8", "e4" など
+                cell.className = `cell ${(r + c) % 2 === 0 ? 'light' : 'dark'}`;
+                if (chessSelectedSquare === squareName) cell.classList.add('selected');
+                
+                const piece = board2D[r][c];
+                if (piece) {
+                    const char = piece.color === 'w' ? piece.type.toUpperCase() : piece.type;
+                    cell.textContent = chessPieces[char];
+                    cell.style.color = piece.color === 'w' ? 'white' : 'black';
+                    cell.style.textShadow = piece.color === 'w' ? '0 0 2px black' : '0 0 2px white';
+                }
+                cell.addEventListener('click', () => handleChessClick(squareName, gameState));
+                boardElement.appendChild(cell);
+            }
+        }
     } else {
-        const isMyTurn = (currentMode === 'local') || (myRole === gameState.currentPlayer);
-        statusElement.textContent = isMyTurn ? "あなたの番です" : "相手の番です...";
+        gameState.board.forEach((val, idx) => {
+            const cell = document.createElement('div');
+            cell.className = 'cell ' + (val ? val.toLowerCase() : '');
+            if (selectedGame === 'go') {
+                if (val) { const stone = document.createElement('div'); stone.className = 'stone'; cell.appendChild(stone); }
+            } else if (selectedGame !== 'othello') cell.textContent = val;
+            cell.addEventListener('click', () => handleCellClick(idx, gameState));
+            boardElement.appendChild(cell);
+        });
     }
+
+    const st = document.getElementById('status');
+    if (gameState.winner) st.textContent = `🎉 ${gameState.winner} の勝利！`;
+    else if (gameState.isDraw) st.textContent = "🤝 引き分け！";
+    else st.textContent = (currentMode === 'local' || myRole === gameState.currentPlayer) ? "あなたの番です" : "相手の番です";
 }
 
-function handleCellClick(index, gameState) {
-    // 観戦者、または自分の番でない（AIモード時含む）場合は弾く
+// --- 操作とAI判定 ---
+function handleChessClick(square, gameState) {
     if (currentMode === 'online' && myRole !== gameState.currentPlayer) return;
-    if (currentMode === 'ai' && gameState.currentPlayer !== 'X') return; 
-    
-    if (gameState.board[index] !== "" || gameState.winner) return;
+    if (currentMode === 'ai' && gameState.currentPlayer !== 'X') return;
+    if (gameState.winner) return;
 
-    processMove(index, gameState);
-}
+    // チェスターン判定 (X=White, O=Black)
+    const engineColor = chessEngine.turn() === 'w' ? 'X' : 'O';
+    if (engineColor !== gameState.currentPlayer) return;
 
-function processMove(index, gameState) {
-    gameState.board[index] = gameState.currentPlayer;
-    
-    // 勝敗チェック
-    for (let p of winPatterns) {
-        const [a, b, c] = p;
-        if (gameState.board[a] && gameState.board[a] === gameState.board[b] && gameState.board[a] === gameState.board[c]) {
-            gameState.winner = gameState.board[a];
-            break;
+    if (!chessSelectedSquare) {
+        const piece = chessEngine.get(square);
+        if (piece && piece.color === chessEngine.turn()) { chessSelectedSquare = square; renderBoard(gameState); }
+    } else {
+        const move = chessEngine.move({ from: chessSelectedSquare, to: square, promotion: 'q' });
+        chessSelectedSquare = null;
+        if (move) {
+            playSE('put');
+            syncGameState(gameState, chessEngine.fen());
+        } else {
+            renderBoard(gameState); // キャンセル
         }
     }
-    if (!gameState.winner && !gameState.board.includes("")) gameState.isDraw = true;
+}
+
+function handleCellClick(idx, gameState) {
+    if (currentMode === 'online' && myRole !== gameState.currentPlayer) return;
+    if (currentMode === 'ai' && gameState.currentPlayer !== 'X') return;
+    if (gameState.winner || gameState.board[idx] !== "") return;
+
+    if (selectedGame === 'othello') {
+        const flipped = getOthelloFlipped(gameState.board, idx, gameState.currentPlayer);
+        if (flipped.length === 0) return;
+        flipped.forEach(fIdx => gameState.board[fIdx] = gameState.currentPlayer);
+    } else if (selectedGame === 'go') {
+        // 囲碁の判定 (簡易版)
+        let newBoard = [...gameState.board];
+        newBoard[idx] = gameState.currentPlayer;
+        const opp = gameState.currentPlayer === "X" ? "O" : "X";
+        // 相手の石を取れるかチェックして消す
+        let captured = false;
+        for (let i = 0; i < 81; i++) {
+            if (newBoard[i] === opp && getLiberties(newBoard, i, opp) === 0) { removeGroup(newBoard, i, opp); captured = true; }
+        }
+        // 自殺手チェック
+        if (!captured && getLiberties(newBoard, idx, gameState.currentPlayer) === 0) return; // 無効手
+        gameState.board = newBoard;
+    }
+    
+    playSE('put');
+    gameState.board[selectedGame === 'go' ? -1 : idx] = gameState.currentPlayer; // goは上で処理済
+    syncGameState(gameState, gameState.board);
+}
+
+function syncGameState(gameState, newBoardData) {
+    gameState.board = newBoardData;
+    
+    // 勝敗判定
+    if (selectedGame === 'chess') {
+        if (chessEngine.in_checkmate()) gameState.winner = gameState.currentPlayer;
+        else if (chessEngine.in_draw()) gameState.isDraw = true;
+    } else if (selectedGame === 'tictactoe') {
+        const wp = [[0,1,2], [3,4,5], [6,7,8], [0,3,6], [1,4,7], [2,5,8], [0,4,8], [2,4,6]];
+        for (let p of wp) if (gameState.board[p[0]] && gameState.board[p[0]] === gameState.board[p[1]] && gameState.board[p[0]] === gameState.board[p[2]]) gameState.winner = gameState.board[p[0]];
+        if (!gameState.winner && !gameState.board.includes("")) gameState.isDraw = true;
+    } else if (selectedGame === 'othello') {
+        if (!gameState.board.includes("")) {
+            const x = gameState.board.filter(c => c === "X").length, o = gameState.board.filter(c => c === "O").length;
+            gameState.winner = x > o ? "X" : (o > x ? "O" : null); if(x === o) gameState.isDraw = true;
+        }
+    }
 
     gameState.currentPlayer = gameState.currentPlayer === "X" ? "O" : "X";
 
     if (currentMode === 'online') {
-        db.ref(`match_rooms/${currentRoomId}`).update({ 
-            board: gameState.board, currentPlayer: gameState.currentPlayer, winner: gameState.winner, isDraw: gameState.isDraw 
-        });
+        db.ref(`match_rooms/${currentRoomId}`).update({ board: gameState.board, currentPlayer: gameState.currentPlayer, winner: gameState.winner, isDraw: gameState.isDraw });
     } else {
         renderBoard(gameState);
-        
-        // AIモードの場合、勝敗がついておらず、Oの番ならAIを動かす
-        if (currentMode === 'ai' && !gameState.winner && !gameState.isDraw && gameState.currentPlayer === 'O') {
-            setTimeout(() => playAI(gameState), 600); // 少し待ってから打つ
-        }
-
-        // ローカル・AIモードでのポイント付与
-        if (currentMode === 'ai' && gameState.winner === 'X') addPoints();
+        if (currentMode === 'ai' && !gameState.winner && !gameState.isDraw && gameState.currentPlayer === 'O') setTimeout(() => playAI(gameState), 800);
+        if (currentMode === 'ai' && gameState.winner === 'X') { userData.points[selectedGame] += 50; saveUser(); }
     }
 }
 
-// ランクごとの簡易AIロジック
+// --- AI ロジック統合版 ---
 function playAI(gameState) {
-    const emptySpots = gameState.board.map((val, idx) => val === "" ? idx : null).filter(val => val !== null);
+    if (selectedGame === 'chess') {
+        const moves = chessEngine.moves();
+        if (moves.length === 0) return;
+        // モジュールのおかげでランダムでも100%ルール通りの手が打てます
+        chessEngine.move(moves[Math.floor(Math.random() * moves.length)]);
+        playSE('put');
+        syncGameState(gameState, chessEngine.fen());
+        return;
+    }
+
+    let emptySpots = gameState.board.map((v, i) => v === "" ? i : null).filter(v => v !== null);
     if (emptySpots.length === 0) return;
-
-    const rankIndex = getRankData(userData.points[selectedGame]).index;
-    let moveIndex = emptySpots[Math.floor(Math.random() * emptySpots.length)]; // 基本はランダム
-
-    // シルバー（index >= 3）以上なら、自分が勝てる手があれば優先する
-    if (rankIndex >= 3) {
-        for (let idx of emptySpots) {
-            gameState.board[idx] = "O";
-            if (winPatterns.some(p => gameState.board[p[0]] === "O" && gameState.board[p[1]] === "O" && gameState.board[p[2]] === "O")) {
-                moveIndex = idx;
-            }
-            gameState.board[idx] = ""; // 戻す
+    
+    let moveIdx = -1;
+    if (selectedGame === 'othello') {
+        let maxF = 0;
+        for (let i of emptySpots) { let f = getOthelloFlipped(gameState.board, i, "O").length; if (f > maxF) { maxF = f; moveIdx = i; } }
+        if (moveIdx !== -1) getOthelloFlipped(gameState.board, moveIdx, "O").forEach(fIdx => gameState.board[fIdx] = "O");
+        else { gameState.currentPlayer = "X"; return renderBoard(gameState); } // パス
+    } else if (selectedGame === 'go') {
+        // AI囲碁: ランダムに打つが、自殺手にならない場所を探す
+        for(let i=0; i<50; i++) {
+            let r = emptySpots[Math.floor(Math.random() * emptySpots.length)];
+            let test = [...gameState.board]; test[r] = "O";
+            if (getLiberties(test, r, "O") > 0) { moveIdx = r; break; }
         }
+        if(moveIdx === -1) { gameState.currentPlayer = "X"; return renderBoard(gameState); } // パス
+    } else {
+        moveIdx = emptySpots[Math.floor(Math.random() * emptySpots.length)];
     }
-    processMove(moveIndex, gameState);
+
+    playSE('put');
+    if(selectedGame !== 'go') gameState.board[moveIdx] = "O";
+    else { let nb = [...gameState.board]; nb[moveIdx] = "O"; gameState.board = nb; } // Go用
+    syncGameState(gameState, gameState.board);
 }
 
-// 勝った時のポイント処理
-function addPoints() {
-    userData.points[selectedGame] += 50; // 1勝50ポイント (2勝でランクアップ)
-    saveUser();
+// --- ユーティリティ (オセロ・囲碁) ---
+function getOthelloFlipped(board, index, player) {
+    const opp = player === "X" ? "O" : "X"; let flipped = []; const dirs = [[-1,-1], [-1,0], [-1,1], [0,-1], [0,1], [1,-1], [1,0], [1,1]];
+    const x = index % 8, y = Math.floor(index / 8);
+    for (let [dx, dy] of dirs) {
+        let nx = x + dx, ny = y + dy, temp = [];
+        while (nx >= 0 && nx < 8 && ny >= 0 && ny < 8) {
+            let nIdx = ny * 8 + nx;
+            if (board[nIdx] === opp) temp.push(nIdx);
+            else if (board[nIdx] === player) { flipped.push(...temp); break; }
+            else break; nx += dx; ny += dy;
+        }
+    } return flipped;
 }
 
-function leaveGame() {
-    if (currentRoomId && currentMode === 'online') {
-        db.ref(`match_rooms/${currentRoomId}`).off('value', gameListener);
-        if (myRole !== "spectator") db.ref(`match_rooms/${currentRoomId}`).remove();
+function getLiberties(board, idx, player, visited = new Set()) {
+    if (visited.has(idx)) return 0; visited.add(idx);
+    const x = idx % 9, y = Math.floor(idx / 9); let lib = 0;
+    const dirs = [[0,-1],[0,1],[-1,0],[1,0]];
+    for (let [dx, dy] of dirs) {
+        let nx = x + dx, ny = y + dy;
+        if (nx >= 0 && nx < 9 && ny >= 0 && ny < 9) {
+            let nIdx = ny * 9 + nx;
+            if (board[nIdx] === "") lib++;
+            else if (board[nIdx] === player) lib += getLiberties(board, nIdx, player, visited);
+        }
+    } return lib;
+}
+function removeGroup(board, idx, player, visited = new Set()) {
+    if (visited.has(idx) || board[idx] !== player) return;
+    visited.add(idx); board[idx] = "";
+    const x = idx % 9, y = Math.floor(idx / 9); const dirs = [[0,-1],[0,1],[-1,0],[1,0]];
+    for (let [dx, dy] of dirs) {
+        let nx = x + dx, ny = y + dy;
+        if (nx >= 0 && nx < 9 && ny >= 0 && ny < 9) removeGroup(board, ny * 9 + nx, player, visited);
     }
-    currentRoomId = null;
-    currentMode = null;
-    switchScreen('homeScreen');
 }
-document.getElementById('leaveGameBtn').addEventListener('click', leaveGame);
 
-// --- 7. 観覧機能 ---
-document.getElementById('spectateBtn').addEventListener('click', () => {
-    switchScreen('spectateScreen');
-    const roomList = document.getElementById('roomList');
-    roomList.innerHTML = "試合データを取得中...";
-
-    roomsRef.orderByChild('status').equalTo('playing').on('value', snapshot => {
-        roomList.innerHTML = "";
-        const rooms = snapshot.val();
-        if (!rooms) return roomList.innerHTML = "<p>現在行われている試合はありません</p>";
-
-        Object.keys(rooms).forEach(roomId => {
-            const players = Object.values(rooms[roomId].players);
-            if (players.length >= 2) {
-                const title = `[${GAME_NAMES[rooms[roomId].gameType]}] ${players[0].name} vs ${players[1].name}`;
-                const btn = document.createElement('div');
-                btn.className = 'room-item';
-                btn.textContent = `👁️ ${title}`;
-                btn.addEventListener('click', () => {
-                    roomsRef.off();
-                    currentMode = 'online';
-                    enterOnlineGame(roomId, "spectator");
-                });
-                roomList.appendChild(btn);
-            }
-        });
-    });
+// 退出処理
+document.getElementById('leaveGameBtn').addEventListener('click', () => {
+    if (currentRoomId && currentMode === 'online') { db.ref(`match_rooms/${currentRoomId}`).off('value', gameListener); if (myRole !== "spectator") db.ref(`match_rooms/${currentRoomId}`).remove(); }
+    currentRoomId = null; currentMode = null; switchScreen('gameSelectScreen');
 });
