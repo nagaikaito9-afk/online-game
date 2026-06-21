@@ -57,7 +57,15 @@ function getRank(pts) { return { name: RANKS[Math.min(Math.floor(pts / 100), 19)
 function saveUser() { localStorage.setItem('boardGameUser', JSON.stringify(userData)); updateUI(); }
 function updateUI() {
     document.getElementById('userNameDisplay').textContent = userData.name;
-    ['tictactoe', 'othello', 'chess', 'go'].forEach(g => { document.getElementById(`rank-${g}`).textContent = `ランク: ${getRank(userData.points[g] || 0).name}`; });
+    ['tictactoe', 'othello', 'chess', 'go'].forEach(g => { 
+        const pts = userData.points[g] || 0;
+        document.getElementById(`rank-${g}`).textContent = `ランク: ${getRank(pts).name}`; 
+        
+        // プログレスバーの更新 (100ポイントで次ランク。余りが進行度(%))
+        // ※ただし最大ランクの場合は常に100%にする
+        const progress = (pts >= 1900) ? 100 : (pts % 100);
+        document.getElementById(`progress-${g}`).style.width = `${progress}%`;
+    });
 }
 updateUI();
 
@@ -82,8 +90,8 @@ document.getElementById('gameSelectBtn').addEventListener('click', () => switchS
 document.getElementById('backToGameSelectBtn').addEventListener('click', () => switchScreen('gameSelectScreen'));
 
 let selectedGame = null, currentMode = null, currentRoomId = null, myRole = null, gameListener = null;
-let chessEngine = null; // チェス用モジュールインスタンス
-let chessSelectedSquare = null; // チェス用選択中マス
+let chessEngine = null; 
+let chessSelectedSquare = null; 
 const GAME_NAMES = { tictactoe: "〇✕ゲーム", othello: "オセロ", chess: "チェス", go: "囲碁" };
 
 document.querySelectorAll('.btn-game').forEach(btn => {
@@ -99,22 +107,21 @@ document.querySelectorAll('.btn-game').forEach(btn => {
 function getInitialBoard(type) {
     if (type === 'tictactoe') return Array(9).fill("");
     if (type === 'othello') { let b = Array(64).fill(""); b[27]="O"; b[28]="X"; b[35]="X"; b[36]="O"; return b; }
-    if (type === 'chess') { chessEngine = new Chess(); chessSelectedSquare = null; return chessEngine.fen(); } // モジュールからFEN（盤面文字列）取得
+    if (type === 'chess') { chessEngine = new Chess(); chessSelectedSquare = null; return chessEngine.fen(); } 
     if (type === 'go') return Array(81).fill("");
 }
 
 document.getElementById('modeLocalBtn').addEventListener('click', () => { currentMode = 'local'; myRole = 'local'; startLocalGame(); });
-document.getElementById('modeAIBtn').addEventListener('click', () => { currentMode = 'ai'; myRole = 'w'; startLocalGame(); }); // チェス用のため 'X' ではなく 'w'/'b' または 'X'/'O' としますが、内部で変換します
+document.getElementById('modeAIBtn').addEventListener('click', () => { currentMode = 'ai'; myRole = 'w'; startLocalGame(); }); 
 
 function startLocalGame() {
     switchScreen('gameScreen');
     document.getElementById('matchTitle').textContent = currentMode === 'ai' ? "VS コンピュータ" : "近くの人と対戦";
-    myRole = (selectedGame === 'chess' || selectedGame === 'go') && currentMode === 'ai' ? 'X' : myRole; // X=先手(白/黒)
+    myRole = (selectedGame === 'chess' || selectedGame === 'go') && currentMode === 'ai' ? 'X' : myRole; 
     let state = { board: getInitialBoard(selectedGame), currentPlayer: "X", winner: null, isDraw: false };
     renderBoard(state);
 }
 
-// オンライン処理 (省略せず記述)
 document.getElementById('modeOnlineBtn').addEventListener('click', () => {
     currentMode = 'online'; switchScreen('matchingScreen');
     const myRank = getRank(userData.points[selectedGame]||0).index;
@@ -151,7 +158,7 @@ function enterOnlineGame(roomId, initialRole) {
         if (data.status === 'playing') {
             switchScreen('gameScreen');
             if (myRole === "pending") myRole = data.players[myId].role;
-            if (selectedGame === 'chess' && chessEngine) chessEngine.load(data.board); // FEN同期
+            if (selectedGame === 'chess' && chessEngine) chessEngine.load(data.board); 
             renderBoard(data);
             if (data.winner === myRole && myRole !== "spectator") { userData.points[selectedGame] += 50; saveUser(); }
         }
@@ -166,14 +173,27 @@ function renderBoard(gameState) {
     boardElement.className = `board ${selectedGame}`;
     boardElement.innerHTML = '';
     
+    // 自分のターンのときだけハイライトを表示する
+    const isMyTurn = (currentMode === 'local') || (myRole === gameState.currentPlayer);
+    
     if (selectedGame === 'chess') {
-        const board2D = chessEngine.board(); // 8x8配列を取得
+        const board2D = chessEngine.board(); 
+        let validMoves = [];
+        
+        // もし駒を選択中なら、動かせる場所（to）のリストを取得
+        if (chessSelectedSquare && isMyTurn) {
+            validMoves = chessEngine.moves({ square: chessSelectedSquare, verbose: true }).map(m => m.to);
+        }
+
         for (let r = 0; r < 8; r++) {
             for (let c = 0; c < 8; c++) {
                 const cell = document.createElement('div');
-                const squareName = String.fromCharCode(97 + c) + (8 - r); // "a8", "e4" など
+                const squareName = String.fromCharCode(97 + c) + (8 - r); 
                 cell.className = `cell ${(r + c) % 2 === 0 ? 'light' : 'dark'}`;
+                
                 if (chessSelectedSquare === squareName) cell.classList.add('selected');
+                // 動かせる場所ならマークをつける
+                if (validMoves.includes(squareName)) cell.classList.add('valid-move');
                 
                 const piece = board2D[r][c];
                 if (piece) {
@@ -190,9 +210,19 @@ function renderBoard(gameState) {
         gameState.board.forEach((val, idx) => {
             const cell = document.createElement('div');
             cell.className = 'cell ' + (val ? val.toLowerCase() : '');
+            
+            // オセロのハイライト表示（自分の番で、かつ空マスで、かつ裏返せる石がある場合）
+            if (selectedGame === 'othello' && isMyTurn && val === "") {
+                if (getOthelloFlipped(gameState.board, idx, gameState.currentPlayer).length > 0) {
+                    cell.classList.add('valid-move');
+                }
+            }
+
             if (selectedGame === 'go') {
                 if (val) { const stone = document.createElement('div'); stone.className = 'stone'; cell.appendChild(stone); }
-            } else if (selectedGame !== 'othello') cell.textContent = val;
+            } else if (selectedGame !== 'othello') {
+                cell.textContent = val;
+            }
             cell.addEventListener('click', () => handleCellClick(idx, gameState));
             boardElement.appendChild(cell);
         });
@@ -201,7 +231,7 @@ function renderBoard(gameState) {
     const st = document.getElementById('status');
     if (gameState.winner) st.textContent = `🎉 ${gameState.winner} の勝利！`;
     else if (gameState.isDraw) st.textContent = "🤝 引き分け！";
-    else st.textContent = (currentMode === 'local' || myRole === gameState.currentPlayer) ? "あなたの番です" : "相手の番です";
+    else st.textContent = isMyTurn ? "あなたの番です" : "相手の番です";
 }
 
 // --- 操作とAI判定 ---
@@ -210,7 +240,6 @@ function handleChessClick(square, gameState) {
     if (currentMode === 'ai' && gameState.currentPlayer !== 'X') return;
     if (gameState.winner) return;
 
-    // チェスターン判定 (X=White, O=Black)
     const engineColor = chessEngine.turn() === 'w' ? 'X' : 'O';
     if (engineColor !== gameState.currentPlayer) return;
 
@@ -219,12 +248,19 @@ function handleChessClick(square, gameState) {
         if (piece && piece.color === chessEngine.turn()) { chessSelectedSquare = square; renderBoard(gameState); }
     } else {
         const move = chessEngine.move({ from: chessSelectedSquare, to: square, promotion: 'q' });
-        chessSelectedSquare = null;
         if (move) {
+            chessSelectedSquare = null;
             playSE('put');
             syncGameState(gameState, chessEngine.fen());
         } else {
-            renderBoard(gameState); // キャンセル
+            // 間違った場所をクリックした場合、それが自分の別の駒なら選択を切り替える
+            const piece = chessEngine.get(square);
+            if (piece && piece.color === chessEngine.turn()) {
+                chessSelectedSquare = square;
+            } else {
+                chessSelectedSquare = null; // それ以外なら選択解除
+            }
+            renderBoard(gameState);
         }
     }
 }
@@ -239,29 +275,25 @@ function handleCellClick(idx, gameState) {
         if (flipped.length === 0) return;
         flipped.forEach(fIdx => gameState.board[fIdx] = gameState.currentPlayer);
     } else if (selectedGame === 'go') {
-        // 囲碁の判定 (簡易版)
         let newBoard = [...gameState.board];
         newBoard[idx] = gameState.currentPlayer;
         const opp = gameState.currentPlayer === "X" ? "O" : "X";
-        // 相手の石を取れるかチェックして消す
         let captured = false;
         for (let i = 0; i < 81; i++) {
             if (newBoard[i] === opp && getLiberties(newBoard, i, opp) === 0) { removeGroup(newBoard, i, opp); captured = true; }
         }
-        // 自殺手チェック
-        if (!captured && getLiberties(newBoard, idx, gameState.currentPlayer) === 0) return; // 無効手
+        if (!captured && getLiberties(newBoard, idx, gameState.currentPlayer) === 0) return; 
         gameState.board = newBoard;
     }
     
     playSE('put');
-    gameState.board[selectedGame === 'go' ? -1 : idx] = gameState.currentPlayer; // goは上で処理済
+    gameState.board[selectedGame === 'go' ? -1 : idx] = gameState.currentPlayer; 
     syncGameState(gameState, gameState.board);
 }
 
 function syncGameState(gameState, newBoardData) {
     gameState.board = newBoardData;
     
-    // 勝敗判定
     if (selectedGame === 'chess') {
         if (chessEngine.in_checkmate()) gameState.winner = gameState.currentPlayer;
         else if (chessEngine.in_draw()) gameState.isDraw = true;
@@ -287,12 +319,11 @@ function syncGameState(gameState, newBoardData) {
     }
 }
 
-// --- AI ロジック統合版 ---
+// --- AI ロジック ---
 function playAI(gameState) {
     if (selectedGame === 'chess') {
         const moves = chessEngine.moves();
         if (moves.length === 0) return;
-        // モジュールのおかげでランダムでも100%ルール通りの手が打てます
         chessEngine.move(moves[Math.floor(Math.random() * moves.length)]);
         playSE('put');
         syncGameState(gameState, chessEngine.fen());
@@ -307,22 +338,21 @@ function playAI(gameState) {
         let maxF = 0;
         for (let i of emptySpots) { let f = getOthelloFlipped(gameState.board, i, "O").length; if (f > maxF) { maxF = f; moveIdx = i; } }
         if (moveIdx !== -1) getOthelloFlipped(gameState.board, moveIdx, "O").forEach(fIdx => gameState.board[fIdx] = "O");
-        else { gameState.currentPlayer = "X"; return renderBoard(gameState); } // パス
+        else { gameState.currentPlayer = "X"; return renderBoard(gameState); } 
     } else if (selectedGame === 'go') {
-        // AI囲碁: ランダムに打つが、自殺手にならない場所を探す
         for(let i=0; i<50; i++) {
             let r = emptySpots[Math.floor(Math.random() * emptySpots.length)];
             let test = [...gameState.board]; test[r] = "O";
             if (getLiberties(test, r, "O") > 0) { moveIdx = r; break; }
         }
-        if(moveIdx === -1) { gameState.currentPlayer = "X"; return renderBoard(gameState); } // パス
+        if(moveIdx === -1) { gameState.currentPlayer = "X"; return renderBoard(gameState); } 
     } else {
         moveIdx = emptySpots[Math.floor(Math.random() * emptySpots.length)];
     }
 
     playSE('put');
     if(selectedGame !== 'go') gameState.board[moveIdx] = "O";
-    else { let nb = [...gameState.board]; nb[moveIdx] = "O"; gameState.board = nb; } // Go用
+    else { let nb = [...gameState.board]; nb[moveIdx] = "O"; gameState.board = nb; } 
     syncGameState(gameState, gameState.board);
 }
 
