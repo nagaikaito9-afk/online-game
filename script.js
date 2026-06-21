@@ -176,6 +176,17 @@ function enterOnlineGame(roomId, initialRole) {
     });
 }
 
+// --- 🌟 役職名（黒・白・✕・〇）を変換する便利関数 ---
+function getPlayerName(role, gameType) {
+    if (gameType === 'othello' || gameType === 'go') {
+        return role === 'X' ? '黒' : '白';
+    } else if (gameType === 'chess') {
+        return role === 'X' ? '白' : '黒'; // チェスはX(先手)が白
+    } else {
+        return role === 'X' ? '✕' : '〇';
+    }
+}
+
 // --- 描画エンジン ---
 const chessPieces = { 'p':'♟', 'n':'♞', 'b':'♝', 'r':'♜', 'q':'♛', 'k':'♚', 'P':'♙', 'N':'♘', 'B':'♗', 'R':'♖', 'Q':'♕', 'K':'♔' };
 
@@ -234,19 +245,33 @@ function renderBoard(gameState) {
         });
     }
 
+    // 🌟 修正ポイント：勝者やターンの表示を、ゲームに合わせた名前に変換
     const st = document.getElementById('status');
     if (gameState.winner) {
-        st.textContent = `🎉 ${gameState.winner} の勝利！`;
+        const winnerName = getPlayerName(gameState.winner, selectedGame);
+        st.textContent = `🎉 【 ${winnerName} 】 の勝利！`;
     } else if (gameState.isDraw) {
         st.textContent = "🤝 引き分け！";
     } else {
         if (currentMode === 'local') {
-            let playerMark = gameState.currentPlayer;
-            if (selectedGame === 'chess') playerMark = gameState.currentPlayer === 'X' ? '白' : '黒';
-            if (selectedGame === 'othello') playerMark = gameState.currentPlayer === 'X' ? '黒' : '白';
-            st.textContent = `【 ${playerMark} 】の番です`;
+            const turnName = getPlayerName(gameState.currentPlayer, selectedGame);
+            st.textContent = `【 ${turnName} 】の番です`;
         } else {
             st.textContent = isMyTurn ? "あなたの番です" : "相手の番です";
+        }
+    }
+
+    // 🌟 修正ポイント：「あなたの状態」で、自分が何色なのか分かりやすく表示
+    const roleDisplay = document.getElementById('myRoleDisplay');
+    if (currentMode === 'local') {
+        roleDisplay.textContent = "ローカル対戦（交代で操作）";
+    } else if (currentMode === 'ai') {
+        roleDisplay.textContent = `VS コンピュータ (あなたは 【 ${getPlayerName('X', selectedGame)} 】)`;
+    } else {
+        if (myRole === 'spectator' || !myRole || myRole === 'pending') {
+            roleDisplay.textContent = "観戦中 / 待機中";
+        } else {
+            roleDisplay.textContent = `オンライン対戦 (あなたは 【 ${getPlayerName(myRole, selectedGame)} 】)`;
         }
     }
 }
@@ -328,7 +353,6 @@ function syncGameState(gameState, newBoardData) {
 
     gameState.currentPlayer = gameState.currentPlayer === "X" ? "O" : "X";
 
-    // 🌟 修正ポイント：Firebaseに送信する際、確実に undefined を排除する
     const updateData = {
         board: gameState.board,
         currentPlayer: gameState.currentPlayer,
