@@ -3,33 +3,64 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>本格オンライン・マルバツゲーム</title>
+    <title>本格オンラインボードゲーム</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
     <div class="container">
         <div id="homeScreen" class="screen">
-            <h1>マルバツ・オンライン</h1>
-            <p class="user-info">現在のユーザー名: <span id="userNameDisplay">ゲスト</span></p>
-            <div class="menu-buttons">
-                <button id="matchingBtn" class="btn-primary">🎮 マッチング</button>
-                <button id="spectateBtn" class="btn-secondary">👁️ 観覧する</button>
-                <button id="editNameBtn" class="btn-outline">✏️ ユーザー名変更</button>
+            <h1>ボードゲーム・アリーナ</h1>
+            <div class="user-info">
+                <p>ユーザー名: <span id="userNameDisplay">ゲスト</span></p>
+                <button id="openNameModalBtn" class="btn-small">変更</button>
             </div>
+            <div class="menu-buttons">
+                <button id="gameSelectBtn" class="btn-primary">🎮 ゲームセレクト</button>
+                <button id="spectateBtn" class="btn-secondary">👁️ 観覧する</button>
+            </div>
+        </div>
+
+        <div id="gameSelectScreen" class="screen hidden">
+            <h2>ゲームを選択</h2>
+            <div class="game-list">
+                <button class="btn-game" data-game="tictactoe">
+                    〇✕ゲーム<br><span class="rank-display" id="rank-tictactoe">ランク: 確認中</span>
+                </button>
+                <button class="btn-game" data-game="chess">
+                    チェス<br><span class="rank-display" id="rank-chess">ランク: 確認中</span>
+                </button>
+                <button class="btn-game" data-game="go">
+                    囲碁<br><span class="rank-display" id="rank-go">ランク: 確認中</span>
+                </button>
+                <button class="btn-game" data-game="othello">
+                    オセロ<br><span class="rank-display" id="rank-othello">ランク: 確認中</span>
+                </button>
+            </div>
+            <button class="btn-outline mt-20 backToHomeBtn">ホームに戻る</button>
+        </div>
+
+        <div id="modeSelectScreen" class="screen hidden">
+            <h2 id="selectedGameTitle">ゲーム名</h2>
+            <p id="currentRankDisplay" style="font-weight: bold; color: #e67e22;"></p>
+            <div class="menu-buttons">
+                <button id="modeLocalBtn" class="btn-primary">近くの人と対戦</button>
+                <button id="modeOnlineBtn" class="btn-secondary">オンラインで対戦</button>
+                <button id="modeAIBtn" class="btn-outline" style="border-color: #9b59b6; color: #9b59b6;">AIと対戦</button>
+            </div>
+            <button class="btn-outline mt-20" id="backToGameSelectBtn">戻る</button>
         </div>
 
         <div id="matchingScreen" class="screen hidden">
             <h2>マッチング中...</h2>
             <div class="loader"></div>
-            <p>対戦相手を探しています...</p>
+            <p>同ランク帯の対戦相手を探しています...</p>
             <button id="cancelMatchBtn" class="btn-outline mt-20">キャンセル</button>
         </div>
 
         <div id="spectateScreen" class="screen hidden">
             <h2>現在行われている試合</h2>
-            <div id="roomList" class="room-list">
-                </div>
-            <button id="backFromSpectateBtn" class="btn-outline mt-20">ホームに戻る</button>
+            <div id="roomList" class="room-list"></div>
+            <button class="btn-outline mt-20 backToHomeBtn">ホームに戻る</button>
         </div>
 
         <div id="gameScreen" class="screen hidden">
@@ -42,7 +73,18 @@
             <div class="board" id="board"></div>
             
             <div class="game-footer">
-                <button id="leaveGameBtn" class="btn-outline">退出してホームに戻る</button>
+                <button id="leaveGameBtn" class="btn-outline">退出して終了</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="nameModal" class="modal hidden">
+        <div class="modal-content">
+            <h3>ユーザー名の変更</h3>
+            <input type="text" id="nameInput" placeholder="新しい名前を入力" maxlength="10">
+            <div class="modal-buttons">
+                <button id="saveNameBtn" class="btn-primary">保存</button>
+                <button id="cancelNameBtn" class="btn-outline">キャンセル</button>
             </div>
         </div>
     </div>

@@ -10,177 +10,208 @@ const firebaseConfig = {
 };
 firebase.initializeApp(firebaseConfig);
 const db = firebase.database();
-const roomsRef = db.ref('rooms');
+const roomsRef = db.ref('match_rooms');
 
-// --- 2. ユーザー管理 ---
-const myId = Math.random().toString(36).substring(2, 10);
-// ブラウザに名前が保存されていれば読み込み、なければゲストにする
-let myName = localStorage.getItem('ticTacToeName') || "ゲスト" + Math.floor(Math.random() * 1000);
-document.getElementById('userNameDisplay').textContent = myName;
+// --- 2. ランクシステムとユーザー管理 ---
+const RANKS = [
+    "ブロンズ I", "ブロンズ II", "ブロンズ III",
+    "シルバー I", "シルバー II", "シルバー III",
+    "ゴールド I", "ゴールド II", "ゴールド III",
+    "プラチナ I", "プラチナ II", "プラチナ III",
+    "ダイアモンド I", "ダイアモンド II", "ダイアモンド III",
+    "マスター I", "マスター II", "マスター III", "マスター IV", "マスター V"
+];
+const POINTS_PER_RANK = 100;
+
+// 初期データ構造
+let userData = JSON.parse(localStorage.getItem('boardGameUser')) || {
+    id: Math.random().toString(36).substring(2, 10),
+    name: "ゲスト" + Math.floor(Math.random() * 1000),
+    points: { tictactoe: 0, chess: 0, go: 0, othello: 0 }
+};
+const myId = userData.id;
+
+function getRankData(pts) {
+    let index = Math.floor(pts / POINTS_PER_RANK);
+    if (index >= RANKS.length) index = RANKS.length - 1;
+    return { name: RANKS[index], index: index };
+}
+
+function saveUser() {
+    localStorage.setItem('boardGameUser', JSON.stringify(userData));
+    updateUI();
+}
+
+function updateUI() {
+    document.getElementById('userNameDisplay').textContent = userData.name;
+    ['tictactoe', 'chess', 'go', 'othello'].forEach(game => {
+        const rank = getRankData(userData.points[game]).name;
+        document.getElementById(`rank-${game}`).textContent = `ランク: ${rank}`;
+    });
+}
+updateUI();
 
 // --- 3. 状態管理変数 ---
+let selectedGame = null; // 選んだゲーム種類
+let currentMode = null;  // 'local', 'online', 'ai', 'spectate'
 let currentRoomId = null;
-let myRole = null; // "X", "O", "spectator"
-let gameListener = null; // 監視解除用
+let myRole = null; 
+let gameListener = null; 
+let localGameState = null; // ローカル/AI用の一時データ
 
-// 勝敗パターン
-const winPatterns = [
-    [0, 1, 2], [3, 4, 5], [6, 7, 8], [0, 3, 6], [1, 4, 7], [2, 5, 8], [0, 4, 8], [2, 4, 6]
-];
+const GAME_NAMES = { tictactoe: "〇✕ゲーム", chess: "チェス", go: "囲碁", othello: "オセロ" };
+const winPatterns = [[0,1,2], [3,4,5], [6,7,8], [0,3,6], [1,4,7], [2,5,8], [0,4,8], [2,4,6]];
 
-// --- 4. 画面切り替え機能 ---
+// --- 4. 画面遷移とUI制御 ---
 function switchScreen(screenId) {
     document.querySelectorAll('.screen').forEach(el => el.classList.add('hidden'));
     document.getElementById(screenId).classList.remove('hidden');
 }
 
-// --- 5. ホーム画面のボタン操作 ---
-document.getElementById('editNameBtn').addEventListener('click', () => {
-    const newName = prompt("新しいユーザー名を入力してください:", myName);
-    if (newName && newName.trim() !== "") {
-        myName = newName.trim();
-        localStorage.setItem('ticTacToeName', myName);
-        document.getElementById('userNameDisplay').textContent = myName;
-    }
+// 名前変更モーダル制御
+document.getElementById('openNameModalBtn').addEventListener('click', () => {
+    document.getElementById('nameInput').value = userData.name;
+    document.getElementById('nameModal').classList.remove('hidden');
+});
+document.getElementById('cancelNameBtn').addEventListener('click', () => {
+    document.getElementById('nameModal').classList.add('hidden');
+});
+document.getElementById('saveNameBtn').addEventListener('click', () => {
+    const newName = document.getElementById('nameInput').value.trim();
+    if (newName) { userData.name = newName; saveUser(); }
+    document.getElementById('nameModal').classList.add('hidden');
 });
 
-// --- 6. マッチング機能 (プレイヤーとして参加) ---
-document.getElementById('matchingBtn').addEventListener('click', () => {
-    switchScreen('matchingScreen');
+// ホームボタン類
+document.querySelectorAll('.backToHomeBtn').forEach(btn => {
+    btn.addEventListener('click', () => switchScreen('homeScreen'));
+});
+document.getElementById('gameSelectBtn').addEventListener('click', () => switchScreen('gameSelectScreen'));
 
-    // 待機中の部屋があるか探す
+// ゲーム選択
+document.querySelectorAll('.btn-game').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+        selectedGame = e.currentTarget.dataset.game;
+        document.getElementById('selectedGameTitle').textContent = GAME_NAMES[selectedGame];
+        const rank = getRankData(userData.points[selectedGame]).name;
+        document.getElementById('currentRankDisplay').textContent = `現在: ${rank}`;
+        switchScreen('modeSelectScreen');
+    });
+});
+document.getElementById('backToGameSelectBtn').addEventListener('click', () => switchScreen('gameSelectScreen'));
+
+// --- 5. ゲーム開始ルーチン ---
+
+// ① 近くの人と対戦 (Local)
+document.getElementById('modeLocalBtn').addEventListener('click', () => {
+    if (selectedGame !== 'tictactoe') return alert("現在は〇✕ゲームのみプレイ可能です");
+    currentMode = 'local';
+    myRole = 'local'; // 1人で両方操作可能
+    startLocalGame();
+});
+
+// ② AIと対戦 (AI)
+document.getElementById('modeAIBtn').addEventListener('click', () => {
+    if (selectedGame !== 'tictactoe') return alert("現在は〇✕ゲームのみプレイ可能です");
+    currentMode = 'ai';
+    myRole = 'X'; // 自分はX固定
+    startLocalGame();
+});
+
+// ③ オンラインで対戦 (Online)
+document.getElementById('modeOnlineBtn').addEventListener('click', () => {
+    if (selectedGame !== 'tictactoe') return alert("現在は〇✕ゲームのみプレイ可能です");
+    currentMode = 'online';
+    switchScreen('matchingScreen');
+    const myRankData = getRankData(userData.points[selectedGame]);
+
+    // ランクが近い（±1）待機部屋を探す
     roomsRef.orderByChild('status').equalTo('waiting').once('value', snapshot => {
         const rooms = snapshot.val();
-        
+        let matchedRoomId = null;
+
         if (rooms) {
-            // 【待機中の部屋があった場合】-> 参加してゲーム開始（XかOをランダムで決める）
-            const roomId = Object.keys(rooms)[0];
-            const roomData = rooms[roomId];
-            const p1Id = Object.keys(roomData.players)[0]; // 部屋を作って待っていた人のID
-            const p1Name = roomData.players[p1Id].name;
+            for (let id in rooms) {
+                const r = rooms[id];
+                // 同じゲームで、かつランクが近い部屋を探す
+                if (r.gameType === selectedGame && Math.abs(r.hostRankIndex - myRankData.index) <= 1) {
+                    matchedRoomId = id;
+                    break;
+                }
+            }
+        }
 
-            // ランダムで役職を割り当て
+        if (matchedRoomId) {
+            // マッチング成功
+            const p1Id = Object.keys(rooms[matchedRoomId].players)[0];
             const myAssignedRole = Math.random() < 0.5 ? "X" : "O";
-            const p1AssignedRole = myAssignedRole === "X" ? "O" : "X";
+            const p1Role = myAssignedRole === "X" ? "O" : "X";
 
-            // データベースを更新して試合開始状態（playing）にする
-            db.ref(`rooms/${roomId}/players/${p1Id}/role`).set(p1AssignedRole);
-            db.ref(`rooms/${roomId}/players/${myId}`).set({ name: myName, role: myAssignedRole });
-            db.ref(`rooms/${roomId}/status`).set('playing');
-
-            enterGame(roomId, myAssignedRole);
-
+            db.ref(`match_rooms/${matchedRoomId}/players/${p1Id}/role`).set(p1Role);
+            db.ref(`match_rooms/${matchedRoomId}/players/${myId}`).set({ name: userData.name, role: myAssignedRole });
+            db.ref(`match_rooms/${matchedRoomId}/status`).set('playing');
+            enterOnlineGame(matchedRoomId, myAssignedRole);
         } else {
-            // 【待機中の部屋がない場合】-> 新しい部屋を作って相手を待つ
+            // 部屋を作る
             const newRoomRef = roomsRef.push();
             currentRoomId = newRoomRef.key;
             newRoomRef.set({
+                gameType: selectedGame,
                 status: 'waiting',
+                hostRankIndex: myRankData.index,
                 board: ["", "", "", "", "", "", "", "", ""],
                 currentPlayer: "X",
                 winner: null,
                 isDraw: false,
-                players: {
-                    [myId]: { name: myName, role: "pending" } // 相手が来るまで役職は未定
-                }
+                players: { [myId]: { name: userData.name, role: "pending" } }
             });
-
-            // もし待っている間にブラウザを閉じたら部屋を消す
             newRoomRef.onDisconnect().remove();
-
-            // 誰かが入ってきて status が playing になるのを監視する
-            enterGame(currentRoomId, "pending");
+            enterOnlineGame(currentRoomId, "pending");
         }
     });
 });
 
 document.getElementById('cancelMatchBtn').addEventListener('click', () => {
-    if (currentRoomId) db.ref(`rooms/${currentRoomId}`).remove();
+    if (currentRoomId) db.ref(`match_rooms/${currentRoomId}`).remove();
     currentRoomId = null;
-    switchScreen('homeScreen');
+    switchScreen('modeSelectScreen');
 });
 
-// --- 7. 観覧機能 ---
-document.getElementById('spectateBtn').addEventListener('click', () => {
-    switchScreen('spectateScreen');
-    const roomList = document.getElementById('roomList');
-    roomList.innerHTML = "試合データを取得中...";
+// --- 6. ゲーム描画・進行処理 ---
 
-    // 進行中の試合（playing）をリアルタイムで取得してボタンを作る
-    roomsRef.orderByChild('status').equalTo('playing').on('value', snapshot => {
-        roomList.innerHTML = "";
-        const rooms = snapshot.val();
-        
-        if (!rooms) {
-            roomList.innerHTML = "<p>現在行われている試合はありません</p>";
-            return;
-        }
+function startLocalGame() {
+    switchScreen('gameScreen');
+    document.getElementById('matchTitle').textContent = currentMode === 'ai' ? "VS コンピュータ" : "近くの人と対戦";
+    document.getElementById('myRoleDisplay').textContent = "ローカルプレイ中";
+    
+    localGameState = { board: ["", "", "", "", "", "", "", "", ""], currentPlayer: "X", winner: null, isDraw: false };
+    renderBoard(localGameState);
+}
 
-        // 試合一覧のボタンを生成
-        Object.keys(rooms).forEach(roomId => {
-            const players = Object.values(rooms[roomId].players);
-            if (players.length >= 2) {
-                const title = `${players[0].name} vs ${players[1].name}`;
-                const btn = document.createElement('div');
-                btn.className = 'room-item';
-                btn.textContent = `👁️ ${title} の試合を観る`;
-                btn.addEventListener('click', () => {
-                    roomsRef.off(); // リストの監視を解除
-                    enterGame(roomId, "spectator"); // 観戦者として入室
-                });
-                roomList.appendChild(btn);
-            }
-        });
-    });
-});
-
-document.getElementById('backFromSpectateBtn').addEventListener('click', () => {
-    roomsRef.off();
-    switchScreen('homeScreen');
-});
-
-// --- 8. ゲーム進行・描画処理 ---
-function enterGame(roomId, initialRole) {
+function enterOnlineGame(roomId, initialRole) {
     currentRoomId = roomId;
     myRole = initialRole;
-    const roomRef = db.ref(`rooms/${roomId}`);
-
-    gameListener = roomRef.on('value', snapshot => {
+    gameListener = db.ref(`match_rooms/${roomId}`).on('value', snapshot => {
         const data = snapshot.val();
-
-        // 部屋が消えた（対戦相手が退出した）場合
         if (!data) {
-            alert("この部屋は閉じられました。ホームに戻ります。");
-            leaveGame();
-            return;
+            alert("対戦相手が退出しました");
+            return leaveGame();
         }
-
-        // 相手が来て試合が始まった時の処理
         if (data.status === 'playing') {
             switchScreen('gameScreen');
-
-            // 自分が「待ち（pending）」状態だった場合、相手が決めた役職を読み取る
-            if (myRole === "pending" && data.players[myId]) {
-                myRole = data.players[myId].role;
-            }
-
-            // タイトルと自分の状態の表示更新
+            if (myRole === "pending") myRole = data.players[myId].role;
+            
             const players = Object.values(data.players);
-            if (players.length >= 2) {
-                document.getElementById('matchTitle').textContent = `${players[0].name} VS ${players[1].name}`;
-            }
-
-            const roleDisplay = document.getElementById('myRoleDisplay');
-            if (myRole === "spectator") {
-                roleDisplay.textContent = "あなたは【観戦者】として視聴中です";
-                roleDisplay.style.color = "#95a5a6";
-            } else {
-                roleDisplay.textContent = `あなたは【プレイヤー ${myRole}】です`;
-                roleDisplay.style.color = myRole === "X" ? "#e74c3c" : "#3498db";
-            }
-
-            // 盤面の描画
+            if (players.length >= 2) document.getElementById('matchTitle').textContent = `${players[0].name} VS ${players[1].name}`;
+            
+            const roleTxt = myRole === "spectator" ? "観戦中" : `プレイヤー ${myRole}`;
+            document.getElementById('myRoleDisplay').textContent = `オンライン: ${roleTxt}`;
             renderBoard(data);
+
+            // 勝敗がついた時、自分がプレイヤーならポイント付与
+            if ((data.winner === myRole) && myRole !== "spectator") {
+                addPoints();
+            }
         }
     });
 }
@@ -199,65 +230,120 @@ function renderBoard(gameState) {
     });
 
     if (gameState.winner) {
-        statusElement.textContent = `🎉 プレイヤー ${gameState.winner} の勝利！`;
-        statusElement.style.color = "#27ae60";
+        statusElement.textContent = `🎉 ${gameState.winner} の勝利！`;
     } else if (gameState.isDraw) {
         statusElement.textContent = "🤝 引き分け！";
-        statusElement.style.color = "#333";
     } else {
-        if (myRole === gameState.currentPlayer) {
-            statusElement.textContent = `あなたの番です！`;
-            statusElement.style.color = "#e67e22";
-        } else {
-            statusElement.textContent = `プレイヤー ${gameState.currentPlayer} の番です...`;
-            statusElement.style.color = "#7f8c8d";
-        }
+        const isMyTurn = (currentMode === 'local') || (myRole === gameState.currentPlayer);
+        statusElement.textContent = isMyTurn ? "あなたの番です" : "相手の番です...";
     }
 }
 
 function handleCellClick(index, gameState) {
-    // 観戦者、または自分の番ではない場合は弾く
-    if (myRole !== gameState.currentPlayer) return;
-    // 既に石がある、勝敗が決まっている場合は弾く
+    // 観戦者、または自分の番でない（AIモード時含む）場合は弾く
+    if (currentMode === 'online' && myRole !== gameState.currentPlayer) return;
+    if (currentMode === 'ai' && gameState.currentPlayer !== 'X') return; 
+    
     if (gameState.board[index] !== "" || gameState.winner) return;
 
-    const newBoard = [...gameState.board];
-    newBoard[index] = gameState.currentPlayer;
+    processMove(index, gameState);
+}
 
-    let newWinner = null;
-    let newIsDraw = false;
-
-    for (let pattern of winPatterns) {
-        const [a, b, c] = pattern;
-        if (newBoard[a] && newBoard[a] === newBoard[b] && newBoard[a] === newBoard[c]) {
-            newWinner = newBoard[a];
+function processMove(index, gameState) {
+    gameState.board[index] = gameState.currentPlayer;
+    
+    // 勝敗チェック
+    for (let p of winPatterns) {
+        const [a, b, c] = p;
+        if (gameState.board[a] && gameState.board[a] === gameState.board[b] && gameState.board[a] === gameState.board[c]) {
+            gameState.winner = gameState.board[a];
             break;
         }
     }
+    if (!gameState.winner && !gameState.board.includes("")) gameState.isDraw = true;
 
-    if (!newWinner && !newBoard.includes("")) newIsDraw = true;
-    const nextPlayer = gameState.currentPlayer === "X" ? "O" : "X";
+    gameState.currentPlayer = gameState.currentPlayer === "X" ? "O" : "X";
 
-    // データベースに一手進んだ状態を書き込む
-    db.ref(`rooms/${currentRoomId}`).update({ 
-        board: newBoard, currentPlayer: nextPlayer, winner: newWinner, isDraw: newIsDraw 
-    });
+    if (currentMode === 'online') {
+        db.ref(`match_rooms/${currentRoomId}`).update({ 
+            board: gameState.board, currentPlayer: gameState.currentPlayer, winner: gameState.winner, isDraw: gameState.isDraw 
+        });
+    } else {
+        renderBoard(gameState);
+        
+        // AIモードの場合、勝敗がついておらず、Oの番ならAIを動かす
+        if (currentMode === 'ai' && !gameState.winner && !gameState.isDraw && gameState.currentPlayer === 'O') {
+            setTimeout(() => playAI(gameState), 600); // 少し待ってから打つ
+        }
+
+        // ローカル・AIモードでのポイント付与
+        if (currentMode === 'ai' && gameState.winner === 'X') addPoints();
+    }
 }
 
-// 退出処理
-function leaveGame() {
-    if (currentRoomId) {
-        const roomRef = db.ref(`rooms/${currentRoomId}`);
-        roomRef.off('value', gameListener); // 監視を解除
-        
-        // もし自分がプレイヤーなら、部屋ごと削除する（相手も強制退出になる）
-        if (myRole === "X" || myRole === "O" || myRole === "pending") {
-            roomRef.remove();
+// ランクごとの簡易AIロジック
+function playAI(gameState) {
+    const emptySpots = gameState.board.map((val, idx) => val === "" ? idx : null).filter(val => val !== null);
+    if (emptySpots.length === 0) return;
+
+    const rankIndex = getRankData(userData.points[selectedGame]).index;
+    let moveIndex = emptySpots[Math.floor(Math.random() * emptySpots.length)]; // 基本はランダム
+
+    // シルバー（index >= 3）以上なら、自分が勝てる手があれば優先する
+    if (rankIndex >= 3) {
+        for (let idx of emptySpots) {
+            gameState.board[idx] = "O";
+            if (winPatterns.some(p => gameState.board[p[0]] === "O" && gameState.board[p[1]] === "O" && gameState.board[p[2]] === "O")) {
+                moveIndex = idx;
+            }
+            gameState.board[idx] = ""; // 戻す
         }
     }
-    currentRoomId = null;
-    myRole = null;
-    switchScreen('homeScreen');
+    processMove(moveIndex, gameState);
 }
 
+// 勝った時のポイント処理
+function addPoints() {
+    userData.points[selectedGame] += 50; // 1勝50ポイント (2勝でランクアップ)
+    saveUser();
+}
+
+function leaveGame() {
+    if (currentRoomId && currentMode === 'online') {
+        db.ref(`match_rooms/${currentRoomId}`).off('value', gameListener);
+        if (myRole !== "spectator") db.ref(`match_rooms/${currentRoomId}`).remove();
+    }
+    currentRoomId = null;
+    currentMode = null;
+    switchScreen('homeScreen');
+}
 document.getElementById('leaveGameBtn').addEventListener('click', leaveGame);
+
+// --- 7. 観覧機能 ---
+document.getElementById('spectateBtn').addEventListener('click', () => {
+    switchScreen('spectateScreen');
+    const roomList = document.getElementById('roomList');
+    roomList.innerHTML = "試合データを取得中...";
+
+    roomsRef.orderByChild('status').equalTo('playing').on('value', snapshot => {
+        roomList.innerHTML = "";
+        const rooms = snapshot.val();
+        if (!rooms) return roomList.innerHTML = "<p>現在行われている試合はありません</p>";
+
+        Object.keys(rooms).forEach(roomId => {
+            const players = Object.values(rooms[roomId].players);
+            if (players.length >= 2) {
+                const title = `[${GAME_NAMES[rooms[roomId].gameType]}] ${players[0].name} vs ${players[1].name}`;
+                const btn = document.createElement('div');
+                btn.className = 'room-item';
+                btn.textContent = `👁️ ${title}`;
+                btn.addEventListener('click', () => {
+                    roomsRef.off();
+                    currentMode = 'online';
+                    enterOnlineGame(roomId, "spectator");
+                });
+                roomList.appendChild(btn);
+            }
+        });
+    });
+});
