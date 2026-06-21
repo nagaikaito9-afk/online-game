@@ -60,9 +60,6 @@ function updateUI() {
     ['tictactoe', 'othello', 'chess', 'go'].forEach(g => { 
         const pts = userData.points[g] || 0;
         document.getElementById(`rank-${g}`).textContent = `ランク: ${getRank(pts).name}`; 
-        
-        // プログレスバーの更新 (100ポイントで次ランク。余りが進行度(%))
-        // ※ただし最大ランクの場合は常に100%にする
         const progress = (pts >= 1900) ? 100 : (pts % 100);
         document.getElementById(`progress-${g}`).style.width = `${progress}%`;
     });
@@ -131,9 +128,13 @@ document.getElementById('modeOnlineBtn').addEventListener('click', () => {
         if (matchedId) {
             const p1Id = Object.keys(rooms[matchedId].players)[0];
             const myAssignedRole = Math.random() < 0.5 ? "X" : "O";
-            db.ref(`match_rooms/${matchedId}/players/${p1Id}/role`).set(myAssignedRole === "X" ? "O" : "X");
-            db.ref(`match_rooms/${matchedId}/players/${myId}`).set({ name: userData.name, role: myAssignedRole });
-            db.ref(`match_rooms/${matchedId}/status`).set('playing');
+            const p1AssignedRole = myAssignedRole === "X" ? "O" : "X";
+            
+            db.ref(`match_rooms/${matchedId}`).update({
+                [`players/${p1Id}/role`]: p1AssignedRole,
+                [`players/${myId}`]: { name: userData.name, role: myAssignedRole },
+                status: 'playing'
+            });
             enterOnlineGame(matchedId, myAssignedRole);
         } else {
             const newRoomRef = roomsRef.push();
@@ -150,11 +151,23 @@ document.getElementById('modeOnlineBtn').addEventListener('click', () => {
 });
 document.getElementById('cancelMatchBtn').addEventListener('click', () => { if (currentRoomId) db.ref(`match_rooms/${currentRoomId}`).remove(); switchScreen('modeSelectScreen'); });
 
+function leaveGame() {
+    if (currentRoomId && currentMode === 'online') { 
+        db.ref(`match_rooms/${currentRoomId}`).off('value', gameListener); 
+        if (myRole !== "spectator") db.ref(`match_rooms/${currentRoomId}`).remove(); 
+    }
+    currentRoomId = null; 
+    currentMode = null; 
+    myRole = null;
+    switchScreen('gameSelectScreen');
+}
+document.getElementById('leaveGameBtn').addEventListener('click', leaveGame);
+
 function enterOnlineGame(roomId, initialRole) {
     currentRoomId = roomId; myRole = initialRole;
     gameListener = db.ref(`match_rooms/${roomId}`).on('value', snap => {
         const data = snap.val();
-        if (!data) return leaveGame();
+        if (!data) return leaveGame(); 
         if (data.status === 'playing') {
             switchScreen('gameScreen');
             if (myRole === "pending") myRole = data.players[myId].role;
@@ -173,14 +186,11 @@ function renderBoard(gameState) {
     boardElement.className = `board ${selectedGame}`;
     boardElement.innerHTML = '';
     
-    // 自分のターンのときだけハイライトを表示する
     const isMyTurn = (currentMode === 'local') || (myRole === gameState.currentPlayer);
     
     if (selectedGame === 'chess') {
         const board2D = chessEngine.board(); 
         let validMoves = [];
-        
-        // もし駒を選択中なら、動かせる場所（to）のリストを取得
         if (chessSelectedSquare && isMyTurn) {
             validMoves = chessEngine.moves({ square: chessSelectedSquare, verbose: true }).map(m => m.to);
         }
@@ -192,7 +202,6 @@ function renderBoard(gameState) {
                 cell.className = `cell ${(r + c) % 2 === 0 ? 'light' : 'dark'}`;
                 
                 if (chessSelectedSquare === squareName) cell.classList.add('selected');
-                // 動かせる場所ならマークをつける
                 if (validMoves.includes(squareName)) cell.classList.add('valid-move');
                 
                 const piece = board2D[r][c];
@@ -211,7 +220,6 @@ function renderBoard(gameState) {
             const cell = document.createElement('div');
             cell.className = 'cell ' + (val ? val.toLowerCase() : '');
             
-            // オセロのハイライト表示（自分の番で、かつ空マスで、かつ裏返せる石がある場合）
             if (selectedGame === 'othello' && isMyTurn && val === "") {
                 if (getOthelloFlipped(gameState.board, idx, gameState.currentPlayer).length > 0) {
                     cell.classList.add('valid-move');
@@ -229,9 +237,20 @@ function renderBoard(gameState) {
     }
 
     const st = document.getElementById('status');
-    if (gameState.winner) st.textContent = `🎉 ${gameState.winner} の勝利！`;
-    else if (gameState.isDraw) st.textContent = "🤝 引き分け！";
-    else st.textContent = isMyTurn ? "あなたの番です" : "相手の番です";
+    if (gameState.winner) {
+        st.textContent = `🎉 ${gameState.winner} の勝利！`;
+    } else if (gameState.isDraw) {
+        st.textContent = "🤝 引き分け！";
+    } else {
+        if (currentMode === 'local') {
+            let playerMark = gameState.currentPlayer;
+            if (selectedGame === 'chess') playerMark = gameState.currentPlayer === 'X' ? '白' : '黒';
+            if (selectedGame === 'othello') playerMark = gameState.currentPlayer === 'X' ? '黒' : '白';
+            st.textContent = `【 ${playerMark} 】の番です`;
+        } else {
+            st.textContent = isMyTurn ? "あなたの番です" : "相手の番です";
+        }
+    }
 }
 
 // --- 操作とAI判定 ---
@@ -253,12 +272,11 @@ function handleChessClick(square, gameState) {
             playSE('put');
             syncGameState(gameState, chessEngine.fen());
         } else {
-            // 間違った場所をクリックした場合、それが自分の別の駒なら選択を切り替える
             const piece = chessEngine.get(square);
             if (piece && piece.color === chessEngine.turn()) {
                 chessSelectedSquare = square;
             } else {
-                chessSelectedSquare = null; // それ以外なら選択解除
+                chessSelectedSquare = null; 
             }
             renderBoard(gameState);
         }
@@ -393,9 +411,3 @@ function removeGroup(board, idx, player, visited = new Set()) {
         if (nx >= 0 && nx < 9 && ny >= 0 && ny < 9) removeGroup(board, ny * 9 + nx, player, visited);
     }
 }
-
-// 退出処理
-document.getElementById('leaveGameBtn').addEventListener('click', () => {
-    if (currentRoomId && currentMode === 'online') { db.ref(`match_rooms/${currentRoomId}`).off('value', gameListener); if (myRole !== "spectator") db.ref(`match_rooms/${currentRoomId}`).remove(); }
-    currentRoomId = null; currentMode = null; switchScreen('gameSelectScreen');
-});
