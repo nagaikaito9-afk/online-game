@@ -156,9 +156,7 @@ function leaveGame() {
         db.ref(`match_rooms/${currentRoomId}`).off('value', gameListener); 
         if (myRole !== "spectator") db.ref(`match_rooms/${currentRoomId}`).remove(); 
     }
-    currentRoomId = null; 
-    currentMode = null; 
-    myRole = null;
+    currentRoomId = null; currentMode = null; myRole = null;
     switchScreen('gameSelectScreen');
 }
 document.getElementById('leaveGameBtn').addEventListener('click', leaveGame);
@@ -292,6 +290,7 @@ function handleCellClick(idx, gameState) {
         const flipped = getOthelloFlipped(gameState.board, idx, gameState.currentPlayer);
         if (flipped.length === 0) return;
         flipped.forEach(fIdx => gameState.board[fIdx] = gameState.currentPlayer);
+        gameState.board[idx] = gameState.currentPlayer;
     } else if (selectedGame === 'go') {
         let newBoard = [...gameState.board];
         newBoard[idx] = gameState.currentPlayer;
@@ -302,10 +301,11 @@ function handleCellClick(idx, gameState) {
         }
         if (!captured && getLiberties(newBoard, idx, gameState.currentPlayer) === 0) return; 
         gameState.board = newBoard;
+    } else {
+        gameState.board[idx] = gameState.currentPlayer;
     }
     
     playSE('put');
-    gameState.board[selectedGame === 'go' ? -1 : idx] = gameState.currentPlayer; 
     syncGameState(gameState, gameState.board);
 }
 
@@ -328,8 +328,16 @@ function syncGameState(gameState, newBoardData) {
 
     gameState.currentPlayer = gameState.currentPlayer === "X" ? "O" : "X";
 
+    // 🌟 修正ポイント：Firebaseに送信する際、確実に undefined を排除する
+    const updateData = {
+        board: gameState.board,
+        currentPlayer: gameState.currentPlayer,
+        winner: gameState.winner || null,
+        isDraw: gameState.isDraw || false
+    };
+
     if (currentMode === 'online') {
-        db.ref(`match_rooms/${currentRoomId}`).update({ board: gameState.board, currentPlayer: gameState.currentPlayer, winner: gameState.winner, isDraw: gameState.isDraw });
+        db.ref(`match_rooms/${currentRoomId}`).update(updateData);
     } else {
         renderBoard(gameState);
         if (currentMode === 'ai' && !gameState.winner && !gameState.isDraw && gameState.currentPlayer === 'O') setTimeout(() => playAI(gameState), 800);
@@ -355,8 +363,13 @@ function playAI(gameState) {
     if (selectedGame === 'othello') {
         let maxF = 0;
         for (let i of emptySpots) { let f = getOthelloFlipped(gameState.board, i, "O").length; if (f > maxF) { maxF = f; moveIdx = i; } }
-        if (moveIdx !== -1) getOthelloFlipped(gameState.board, moveIdx, "O").forEach(fIdx => gameState.board[fIdx] = "O");
-        else { gameState.currentPlayer = "X"; return renderBoard(gameState); } 
+        if (moveIdx !== -1) {
+            getOthelloFlipped(gameState.board, moveIdx, "O").forEach(fIdx => gameState.board[fIdx] = "O");
+            gameState.board[moveIdx] = "O";
+        } else { 
+            gameState.currentPlayer = "X"; 
+            return renderBoard(gameState); 
+        } 
     } else if (selectedGame === 'go') {
         for(let i=0; i<50; i++) {
             let r = emptySpots[Math.floor(Math.random() * emptySpots.length)];
@@ -364,13 +377,13 @@ function playAI(gameState) {
             if (getLiberties(test, r, "O") > 0) { moveIdx = r; break; }
         }
         if(moveIdx === -1) { gameState.currentPlayer = "X"; return renderBoard(gameState); } 
+        let nb = [...gameState.board]; nb[moveIdx] = "O"; gameState.board = nb;
     } else {
         moveIdx = emptySpots[Math.floor(Math.random() * emptySpots.length)];
+        gameState.board[moveIdx] = "O";
     }
 
     playSE('put');
-    if(selectedGame !== 'go') gameState.board[moveIdx] = "O";
-    else { let nb = [...gameState.board]; nb[moveIdx] = "O"; gameState.board = nb; } 
     syncGameState(gameState, gameState.board);
 }
 
