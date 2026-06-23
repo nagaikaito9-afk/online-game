@@ -123,17 +123,56 @@ function getInitialBoard(type) {
         const size = parseInt(document.getElementById('goSizeSelect').value);
         const handicap = parseInt(document.getElementById('goHandicap').value);
         let b = Array(size * size).fill("");
-        // 置き石簡易ロジック（盤の中央付近に適当に散らす）
+        
         if (handicap > 0) {
-            let placed = 0;
-            while(placed < handicap) {
-                let r = Math.floor(Math.random() * (size * size));
-                if(b[r] === "") { b[r] = "X"; placed++; }
+            // 置き石ロジック (簡易的な星の位置)
+            const pts = getStarPoints(size);
+            const handicapPts = {
+                9: [2, 6, 4, 1, 5, 3, 7], // 2-7個
+                13: [3, 9, 6, 2, 7, 4, 10, 5, 11], // 2-9個
+                19: [3, 9, 6, 2, 7, 4, 10, 5, 11] // 2-9個
+            };
+            
+            if(handicap >= 2) {
+                // 簡易的に天元を最後に回し、星を優先
+                const starIndexes = pts.filter((p, i) => size===9 ? i<4 : i<8);
+                const tengenIndex = pts.filter((p, i) => size===9 ? i===4 : i===8)[0];
+                let placed = 0;
+                
+                for(let i=0; i < Math.min(handicap, starIndexes.length); i++){
+                    b[starIndexes[i].y * size + starIndexes[i].x] = "X";
+                    placed++;
+                }
+                if(handicap > placed && tengenIndex) {
+                    b[tengenIndex.y * size + tengenIndex.x] = "X";
+                }
+            } else if (handicap === 1) {
+                const tengen = pts.filter((p, i) => size===9 ? i===4 : i===8)[0];
+                if(tengen) b[tengen.y * size + tengen.x] = "X";
             }
         }
         return b;
     }
     return Array(9).fill(""); // default
+}
+
+// 盤面サイズに応じた星(と天元)の座標を取得
+function getStarPoints(size) {
+    if (size === 9) return [
+        {x:2, y:2}, {x:6, y:2}, {x:2, y:6}, {x:6, y:6}, // 四隅の星
+        {x:4, y:4} // 天元
+    ];
+    if (size === 13) return [
+        {x:3, y:3}, {x:9, y:3}, {x:3, y:9}, {x:9, y:9}, // 四隅の星
+        {x:3, y:6}, {x:9, y:6}, {x:6, y:3}, {x:6, y:9}, // 辺の星
+        {x:6, y:6} // 天元
+    ];
+    if (size === 19) return [
+        {x:3, y:3}, {x:15, y:3}, {x:3, y:15}, {x:15, y:15}, // 四隅の星
+        {x:3, y:9}, {x:15, y:9}, {x:9, y:3}, {x:9, y:15}, // 辺の星
+        {x:9, y:9} // 天元
+    ];
+    return [];
 }
 
 document.getElementById('modeLocalBtn').addEventListener('click', () => { currentMode = 'local'; myRole = 'local'; startLocalGame(); });
@@ -147,14 +186,16 @@ function startLocalGame() {
     
     // 囲碁の置き石がある場合、最初の手番は白(O)
     let firstPlayer = "X";
+    let handicap = 0;
     if (selectedGame === 'go') {
-        const handicap = parseInt(document.getElementById('goHandicap').value);
+        handicap = parseInt(document.getElementById('goHandicap').value);
         if(handicap > 0) firstPlayer = "O";
     }
 
     let state = { 
         board: getInitialBoard(selectedGame), currentPlayer: firstPlayer, winner: null, isDraw: false,
         goSize: selectedGame === 'go' ? parseInt(document.getElementById('goSizeSelect').value) : null,
+        handicap: handicap,
         captured: { X: 0, O: 0 } // アゲハマ用
     };
     renderBoard(state);
@@ -201,6 +242,7 @@ document.getElementById('modeOnlineBtn').addEventListener('click', () => {
             newRoomRef.set({
                 gameType: selectedGame, status: 'waiting', hostRankIndex: myRank, password: null,
                 goSize: goSize,
+                handicap: handicap,
                 board: getInitialBoard(selectedGame), currentPlayer: handicap > 0 ? "O" : "X", winner: null, isDraw: false,
                 captured: { X: 0, O: 0 },
                 players: { [myId]: { name: userData.name, role: "pending" } }
@@ -230,6 +272,7 @@ document.getElementById('createPrivateRoomBtn').addEventListener('click', () => 
     newRoomRef.set({
         gameType: selectedGame, status: 'waiting', password: pw,
         goSize: goSize,
+        handicap: handicap,
         board: getInitialBoard(selectedGame), currentPlayer: handicap > 0 ? "O" : "X", winner: null, isDraw: false,
         captured: { X: 0, O: 0 },
         players: { [myId]: { name: userData.name, role: "pending" } }
@@ -377,17 +420,26 @@ function renderBoard(gameState) {
     boardElement.innerHTML = '';
     
     const isMyTurn = (currentMode === 'local') || (myRole === gameState.currentPlayer);
+    const turnClass = `turn-${gameState.currentPlayer.toLowerCase()}`;
+    boardElement.classList.add(turnClass); // 手番クラスを追加 (囲碁のホバー用)
     
     // UI出し分け
     document.getElementById('resignBtn').classList.toggle('hidden', gameState.winner != null);
     document.getElementById('passBtn').classList.toggle('hidden', selectedGame !== 'go' || gameState.winner != null || !isMyTurn);
     
+    let starPoints = [];
     if(selectedGame === 'go') {
         document.getElementById('goCapturedDisplay').classList.remove('hidden');
         document.getElementById('capBlack').textContent = gameState.captured ? gameState.captured.X : 0;
         document.getElementById('capWhite').textContent = gameState.captured ? gameState.captured.O : 0;
-        const s = gameState.goSize || 9;
-        const cellSize = s === 19 ? 22 : (s === 13 ? 30 : 40);
+        const s = gameState.goSize || 19; // デフォルト19路
+        starPoints = getStarPoints(s);
+        
+        // 路盤サイズに応じたグリッド設定とセルサイズ
+        let cellSize = 22; // 19路
+        if (s === 9) cellSize = 40;
+        if (s === 13) cellSize = 30;
+        
         boardElement.style.gridTemplateColumns = `repeat(${s}, ${cellSize}px)`;
         boardElement.style.gridTemplateRows = `repeat(${s}, ${cellSize}px)`;
     } else {
@@ -424,21 +476,48 @@ function renderBoard(gameState) {
             }
         }
     } else {
+        const size = gameState.goSize || (selectedGame === 'go' ? 19 : Math.sqrt(gameState.board.length));
+        
         gameState.board.forEach((val, idx) => {
             const cell = document.createElement('div');
             cell.className = 'cell ' + (val ? val.toLowerCase() : '');
             
+            const x = idx % size;
+            const y = Math.floor(idx / size);
+            
+            // オセロのヒント
             if (selectedGame === 'othello' && isMyTurn && val === "") {
                 if (getOthelloFlipped(gameState.board, idx, gameState.currentPlayer).length > 0) {
                     cell.classList.add('valid-move');
                 }
             }
 
+            // --- 囲碁のビジュアル強化ロジック ---
             if (selectedGame === 'go') {
-                if (val) { const stone = document.createElement('div'); stone.className = 'stone'; cell.appendChild(stone); }
+                // 星と天元の描画
+                if (starPoints.some(pt => pt.x === x && pt.y === y)) {
+                    cell.classList.add('star-point');
+                    const dot = document.createElement('div');
+                    dot.className = 'star-dot';
+                    cell.appendChild(dot);
+                }
+                
+                // ホバー時に石を表示するためのプレースホルダー
+                const stone = document.createElement('div');
+                stone.className = 'stone';
+                if (!val) { 
+                    // 石がない場合のみホバー用に準備
+                    if (isMyTurn && !gameState.winner) {
+                        cell.classList.add('can-move');
+                    }
+                }
+                cell.appendChild(stone);
+                
             } else if (selectedGame !== 'othello') {
+                // 〇✕ゲームなど
                 cell.textContent = val;
             }
+            
             cell.addEventListener('click', () => handleCellClick(idx, gameState));
             boardElement.appendChild(cell);
         });
@@ -507,7 +586,7 @@ function handleCellClick(idx, gameState) {
         let newBoard = [...gameState.board];
         newBoard[idx] = gameState.currentPlayer;
         const opp = gameState.currentPlayer === "X" ? "O" : "X";
-        const size = gameState.goSize || 9;
+        const size = gameState.goSize || 19;
         let capturedCount = 0;
         
         // 相手の石を囲んだら取る
@@ -516,7 +595,7 @@ function handleCellClick(idx, gameState) {
                 capturedCount += removeGroup(newBoard, i, opp, size); 
             }
         }
-        // 自殺手防止
+        // 自殺手防止 (ただし、相手の石を取れる場合は自殺手ではない)
         if (capturedCount === 0 && getLiberties(newBoard, idx, gameState.currentPlayer, size) === 0) return; 
         
         gameState.board = newBoard;
@@ -621,12 +700,35 @@ function playAI(gameState) {
             gameState.board[moveIdx] = "O";
         }
     } else if (selectedGame === 'go') {
-        const size = gameState.goSize || 9;
+        const size = gameState.goSize || 19;
+        
+        // 置き石周辺を優先する簡易的なロジック
+        if(gameState.handicap > 0 && gameState.board.filter(c=>c==='O').length < 3) {
+            // ゲーム序盤は石の近くを狙う
+            const myStones = gameState.board.map((v, i) => v === "O" ? i : null).filter(v => v !== null);
+            let nearbySpots = [];
+            if(myStones.length > 0){
+                for(let sIdx of myStones) {
+                    const sx = sIdx % size, sy = Math.floor(sIdx / size);
+                    const dirs = [[-1,0],[1,0],[0,-1],[0,1]];
+                    for(let [dx,dy] of dirs){
+                        let nx = sx+dx, ny = sy+dy;
+                        if(nx>=0 && nx<size && ny>=0 && ny<size){
+                            let nIdx = ny*size+nx;
+                            if(gameState.board[nIdx] === "") nearbySpots.push(nIdx);
+                        }
+                    }
+                }
+            }
+            if(nearbySpots.length > 0) emptySpots = nearbySpots; // 近くの空き地を優先
+        }
+
         for(let i=0; i<50; i++) {
             let r = emptySpots[Math.floor(Math.random() * emptySpots.length)];
             let test = [...gameState.board]; test[r] = "O";
-            if (getLiberties(test, r, "O", size) > 0) { moveIdx = r; break; }
+            if (getLiberties(test, r, "O", size) > 0) { moveIdx = r; break; } // 自殺手でなければ採用
         }
+        
         if(moveIdx !== -1) {
             let nb = [...gameState.board]; nb[moveIdx] = "O"; 
             
@@ -643,12 +745,13 @@ function playAI(gameState) {
             }
             gameState.board = nb;
         } else {
-             // パス
+             // 良い手が見つからない場合AIはパス
             gameState.currentPlayer = "X";
             syncGameState(gameState, gameState.board);
             return;
         }
     } else {
+        // 〇✕ゲームなど
         moveIdx = emptySpots[Math.floor(Math.random() * emptySpots.length)];
         gameState.board[moveIdx] = "O";
     }
@@ -681,7 +784,8 @@ function getOthelloFlipped(board, index, player) {
     } return flipped;
 }
 
-function getLiberties(board, idx, player, size = 9, visited = new Set()) {
+// 囲碁：呼吸点（ダメ）の数を計算
+function getLiberties(board, idx, player, size = 19, visited = new Set()) {
     if (visited.has(idx)) return 0; visited.add(idx);
     const x = idx % size, y = Math.floor(idx / size); let lib = 0;
     const dirs = [[0,-1],[0,1],[-1,0],[1,0]];
@@ -689,15 +793,16 @@ function getLiberties(board, idx, player, size = 9, visited = new Set()) {
         let nx = x + dx, ny = y + dy;
         if (nx >= 0 && nx < size && ny >= 0 && ny < size) {
             let nIdx = ny * size + nx;
-            if (board[nIdx] === "") lib++;
-            else if (board[nIdx] === player) lib += getLiberties(board, nIdx, player, size, visited);
+            if (board[nIdx] === "") lib++; // 空き地＝呼吸点
+            else if (board[nIdx] === player) lib += getLiberties(board, nIdx, player, size, visited); // 味方の石なら繋がっている
         }
     } return lib;
 }
 
-function removeGroup(board, idx, player, size = 9, visited = new Set()) {
+// 囲碁：死に石のグループを削除し、数を返す
+function removeGroup(board, idx, player, size = 19, visited = new Set()) {
     if (visited.has(idx) || board[idx] !== player) return 0;
-    visited.add(idx); board[idx] = "";
+    visited.add(idx); board[idx] = ""; // 石を取り除く
     let removedCount = 1;
     const x = idx % size, y = Math.floor(idx / size); const dirs = [[0,-1],[0,1],[-1,0],[1,0]];
     for (let [dx, dy] of dirs) {

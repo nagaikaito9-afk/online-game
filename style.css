@@ -36,19 +36,23 @@ button { padding: 12px 20px; font-size: 1rem; cursor: pointer; border: none; bor
 .modal-buttons { display: flex; gap: 10px; }
 
 /* --- 盤面デザイン --- */
-.board { display: grid; margin: 0 auto 10px auto; width: fit-content; border: 5px solid #333; border-radius: 5px; }
+.board { display: grid; margin: 0 auto 10px auto; width: fit-content; border: 5px solid #333; border-radius: 5px; position: relative; }
 .board .cell { display: flex; justify-content: center; align-items: center; cursor: pointer; user-select: none; position: relative; }
-.board.tictactoe { grid-template-columns: repeat(3, 80px); grid-template-rows: repeat(3, 80px); gap: 5px; background-color: #333; }
-.board.tictactoe .cell { background-color: white; font-size: 3rem; font-weight: bold; }
+
+/* 〇✕ゲーム */
+.board.tictactoe { grid-template-columns: repeat(3, 80px); grid-template-rows: repeat(3, 80px); gap: 5px; background-color: #333; border-radius: 5px; }
+.board.tictactoe .cell { background-color: white; font-size: 3rem; font-weight: bold; border-radius: 3px; }
 .board.tictactoe .cell.x { color: #e74c3c; }
 .board.tictactoe .cell.o { color: #3498db; }
 
-.board.othello { grid-template-columns: repeat(8, 40px); grid-template-rows: repeat(8, 40px); gap: 2px; background-color: #27ae60; border-color: #2c3e50; }
-.board.othello .cell { background-color: #2ecc71; font-size: 1.5rem; }
-.board.othello .cell.x::after { content: ""; display: block; width: 30px; height: 30px; background: black; border-radius: 50%; box-shadow: 2px 2px 5px rgba(0,0,0,0.3); z-index: 2;}
-.board.othello .cell.o::after { content: ""; display: block; width: 30px; height: 30px; background: white; border-radius: 50%; box-shadow: 2px 2px 5px rgba(0,0,0,0.3); z-index: 2;}
-.board.othello .cell.valid-move::before { content: ""; display: block; width: 12px; height: 12px; background: rgba(255,255,255,0.4); border-radius: 50%; position: absolute; }
+/* オセロ */
+.board.othello { grid-template-columns: repeat(8, 40px); grid-template-rows: repeat(8, 40px); gap: 2px; background-color: #27ae60; border-color: #2c3e50; border-radius: 4px; padding: 2px;}
+.board.othello .cell { background-color: #2ecc71; font-size: 1.5rem; border-radius: 2px; }
+.board.othello .cell.x::after { content: ""; display: block; width: 32px; height: 32px; background: black; border-radius: 50%; box-shadow: 2px 2px 5px rgba(0,0,0,0.3); z-index: 2;}
+.board.othello .cell.o::after { content: ""; display: block; width: 32px; height: 32px; background: white; border-radius: 50%; box-shadow: 2px 2px 5px rgba(0,0,0,0.3); border: 1px solid #ccc; z-index: 2;}
+.board.othello .cell.valid-move::before { content: ""; display: block; width: 14px; height: 14px; background: rgba(255,255,255,0.4); border-radius: 50%; position: absolute; }
 
+/* チェス */
 .board.chess { grid-template-columns: repeat(8, 40px); grid-template-rows: repeat(8, 40px); background-color: #fff; border-color: #333; gap: 0;}
 .board.chess .cell { font-size: 2rem; width: 40px; height: 40px; }
 .board.chess .cell.light { background-color: #f0d9b5; }
@@ -56,13 +60,62 @@ button { padding: 12px 20px; font-size: 1rem; cursor: pointer; border: none; bor
 .board.chess .cell.selected { background-color: #f1c40f !important; }
 .board.chess .cell.valid-move::before { content: ""; display: block; width: 12px; height: 12px; background: rgba(0,0,0,0.3); border-radius: 50%; position: absolute; z-index: 5;}
 
-/* 囲碁のデザイン (サイズはJSで動的に適用) */
-.board.go { gap: 0px; background-color: #e6b87d; border: 4px solid #8e5a2d; }
-.board.go .cell { background-color: transparent; }
-.board.go .cell::before { content: ""; position: absolute; top: 50%; left: 0; right: 0; height: 1px; background: #333; }
-.board.go .cell::after { content: ""; position: absolute; top: 0; bottom: 0; left: 50%; width: 1px; background: #333; }
-.board.go .cell.x .stone { z-index: 2; width: 80%; height: 80%; background: black; border-radius: 50%; box-shadow: 2px 2px 4px rgba(0,0,0,0.4); }
-.board.go .cell.o .stone { z-index: 2; width: 80%; height: 80%; background: white; border-radius: 50%; box-shadow: 2px 2px 4px rgba(0,0,0,0.4); border: 1px solid #ccc;}
+/* --- 囲碁のビジュアル作成 (強化版) --- */
+.board.go { gap: 0px; background-color: #e6b87d; background-image: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADIAAAAyCAMAAAAAF96AAAAVTVRYdFhNTDpjb20uYWRvYmUueG1wAAAAAAA8P3hwYWNrZXQgYmVnaW49Iu+7vyIgaWQ9Ilc1TTBNcENlaGlIenJlU3pOVGN6Z2MiPz4gPHg6eG1wbWV0YSB4bWxuczp4PSJhZG9iZTpuczptZXRhLyIgeDp4bXB0az0iQWRvYmUgWE1QIENvcmUgNS42LWMxMzggNzkuMTU5ODI0LCAyMDE2LzA5LzE0LTAxOjA5OjAxICAgICAgICAiPiA8cmRmOlJERiB4bWxuczpyZGY9Imh0dHA6Ly93d3cudzMub3JnLzE5OTkvMDIvMjItcmRmLXN5bnRheC1ucyMiPiA8cmRmOkRlc2NyaXB0aW9uIHJkZjphYm91dD0iIiB4bWxuczp4bXBNRz0ih0dHA6Ly9ucy5hZG9iZS5jb20veGFwLzEuMC9bWcvIiB4bWxuczp4bXA9Imh0dHA6Ly9ucy5hZG9iZS5jb20veGFwLzEuMC8iIHhtbG5zOnRWRT0iaHR0cDosLy9ucy5hZG9iZS5jb20veGFwLzEuMC90L1R5cGVTdHJ1Y3QvIiB4bWxuczpzdFJlZj0iaHR0cDovL25zLmFkb2JlLmNvbS94YXAvMS4wL3NUeXBlL1Jlc291cmNlUmVmIyIgeG1wTUc6RG9jdW1lbnRJRD0ieG1wLmRpZDo3NkRDMERCODhCRTQxMUU4ODhDNjg0QTAxMDUyNjYwMSIgeG1wTUc6SW5zdGFuY2VJRD0ieG1wLmlpZDo3NkRDMERCNzg4REU0MTFFODg4QzY4NEEwMTA1MjY2MDEiIHhtcDpDcmVhdG9yVG9vbD0iQWRvYmUgUGhvdG9zaG9wIENDIDIwMTcgKFdpbmRvd3MpIj4gPHhtcE1HOkRlcml2ZWRGcm9tIHN0UmVmOmluc3RhbmNlSUQ9InhtcC5paWQ6NzZEMDBEQjc4OERFNDExRTg4OEM2ODRBMDEwNTI2NjAxIiBzdFJlZjpkb2N1bWVudElEPSJ4bXAuZGlkOjc2RDMwREI4OEJFNDExRTg4OEM2ODRBMDEwNTI2NjAxIi8+IDwvcmRmOkRlc2NyaXB0aW9uPiA8L3JkZjpSREY+IDwveDp4bXBtZXRhPiA8P3hwYWNrZXQgZW5kPSJyIj8+TqM7YAAAAFBLREFUeNpiYGBkYGJgYmBkYGZgZmBiYGZgZmBiYGZgZmBiYGZgZmBiYGZgZmBiYGZgZmBiYGZgZmBiYGZgZmBiYGZgZmBiYGZgZmBiYGZgZmACOWACAK4DAJ5T144IAAAAAElFTkSuQmCC'); border: 5px solid #8e5a2d; box-shadow: inset 0 0 20px rgba(0,0,0,0.1); border-radius: 5px; }
+.board.go .cell { background-color: transparent; width: 22px; height: 22px; }
+
+/* 交差点の線 */
+.board.go .cell::before { content: ""; position: absolute; top: 50%; left: 0; right: 0; height: 1px; background: #555; z-index: 0; }
+.board.go .cell::after { content: ""; position: absolute; top: 0; bottom: 0; left: 50%; width: 1px; background: #555; z-index: 0; }
+
+/* 星と天元の点 */
+.board.go .cell.star-point .star-dot {
+    width: 5px; height: 5px; background-color: #333; border-radius: 50%;
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    z-index: 1; /* 線の上に描画 */
+}
+
+/* リアルな碁石 */
+.board.go .cell.x .stone, .board.go .cell.o .stone {
+    z-index: 3; width: 90%; height: 90%;
+    border-radius: 50%;
+    position: absolute; top: 5%; left: 5%;
+}
+
+/* 黒石 */
+.board.go .cell.x .stone {
+    background: radial-gradient(circle at 35% 35%, #444 0%, #111 70%, #000 100%);
+    box-shadow: 2px 2px 4px rgba(0,0,0,0.5), inset 0 1px 1px rgba(255,255,255,0.15);
+}
+
+/* 白石 */
+.board.go .cell.o .stone {
+    background: radial-gradient(circle at 35% 35%, #fff 0%, #eee 40%, #ccc 100%);
+    box-shadow: 2px 2px 4px rgba(0,0,0,0.4);
+    border: 1px solid #aaa;
+}
+
+/* 碁石のホバープレビュー（幽霊石） */
+.board.go .cell:not(.x):not(.o):not(.valid-move):hover::before,
+.board.go .cell:not(.x):not(.o):not(.valid-move):hover::after {
+    background: #777; /* 線を少し強調 */
+}
+
+.board.go .cell.can-move:not(.x):not(.o):hover .stone {
+    z-index: 2; width: 90%; height: 90%;
+    border-radius: 50%; opacity: 0.5;
+    position: absolute; top: 5%; left: 5%;
+    display: block !important;
+}
+
+/* 黒石ホバー */
+.board.go.turn-x .cell.can-move:not(.x):not(.o):hover .stone {
+    background: #111; box-shadow: none; border: none;
+}
+/* 白石ホバー */
+.board.go.turn-o .cell.can-move:not(.x):not(.o):hover .stone {
+    background: #fff; border: 1px solid #ccc; box-shadow: none;
+}
 
 /* チャットエリア */
 .chat-area { margin-top: 10px; border: 1px solid #ddd; border-radius: 8px; overflow: hidden; background: #fff; text-align: left; }
