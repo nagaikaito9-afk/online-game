@@ -5,7 +5,9 @@ const firebaseConfig = {
     databaseURL: "https://online-game-73f50-default-rtdb.firebaseio.com", 
     projectId: "online-game-73f50"
 };
-firebase.initializeApp(firebaseConfig);
+if (!firebase.apps.length) {
+    firebase.initializeApp(firebaseConfig);
+}
 const db = firebase.database();
 const roomsRef = db.ref('match_rooms');
 
@@ -58,6 +60,7 @@ function saveUser() { localStorage.setItem('boardGameUser', JSON.stringify(userD
 function updateUI() {
     document.getElementById('userNameDisplay').textContent = userData.name;
     ['tictactoe', 'othello', 'chess', 'go'].forEach(g => { 
+        if(!document.getElementById(`rank-${g}`)) return;
         const pts = userData.points[g] || 0;
         document.getElementById(`rank-${g}`).textContent = `ランク: ${getRank(pts).name}`; 
         const progress = (pts >= 1900) ? 100 : (pts % 100);
@@ -70,6 +73,7 @@ updateUI();
 function switchScreen(screenId) {
     document.querySelectorAll('.screen').forEach(el => el.classList.add('hidden'));
     document.getElementById(screenId).classList.remove('hidden');
+    document.getElementById('privateRoomError').textContent = ""; // エラーリセット
 }
 
 document.getElementById('settingsBtn').addEventListener('click', () => {
@@ -86,26 +90,50 @@ document.querySelectorAll('.backToHomeBtn').forEach(btn => btn.addEventListener(
 document.getElementById('gameSelectBtn').addEventListener('click', () => switchScreen('gameSelectScreen'));
 document.getElementById('backToGameSelectBtn').addEventListener('click', () => switchScreen('gameSelectScreen'));
 
+// トランプ画面遷移
+document.getElementById('trumpCategoryBtn').addEventListener('click', () => switchScreen('trumpSelectScreen'));
+
 let selectedGame = null, currentMode = null, currentRoomId = null, myRole = null, gameListener = null, chatListener = null;
-let chessEngine = null; 
-let chessSelectedSquare = null; 
-const GAME_NAMES = { tictactoe: "〇✕ゲーム", othello: "オセロ", chess: "チェス", go: "囲碁" };
+let chessEngine = null, chessSelectedSquare = null; 
+const GAME_NAMES = { tictactoe: "〇✕ゲーム", othello: "オセロ", chess: "チェス", go: "囲碁", babanuki: "ババ抜き", speed: "スピード", sevens: "7ならべ", memory: "神経衰弱", daifugo: "大富豪" };
 
 document.querySelectorAll('.btn-game').forEach(btn => {
+    if(btn.id === 'trumpCategoryBtn') return; // カテゴリボタンは除外
     btn.addEventListener('click', (e) => {
         selectedGame = e.currentTarget.dataset.game;
         document.getElementById('selectedGameTitle').textContent = GAME_NAMES[selectedGame];
-        document.getElementById('currentRankDisplay').textContent = `現在: ${getRank(userData.points[selectedGame] || 0).name}`;
+        document.getElementById('currentRankDisplay').textContent = userData.points[selectedGame] !== undefined ? `現在: ${getRank(userData.points[selectedGame] || 0).name}` : "トランプゲーム";
+        
+        // 囲碁専用設定の表示切替
+        document.getElementById('goSettings').classList.toggle('hidden', selectedGame !== 'go');
+        
         switchScreen('modeSelectScreen');
     });
 });
+
+// プライベートマッチ画面遷移
+document.getElementById('privateRoomSelectBtn').addEventListener('click', () => switchScreen('privateRoomScreen'));
 
 // --- ゲーム初期化と同期設定 ---
 function getInitialBoard(type) {
     if (type === 'tictactoe') return Array(9).fill("");
     if (type === 'othello') { let b = Array(64).fill(""); b[27]="O"; b[28]="X"; b[35]="X"; b[36]="O"; return b; }
     if (type === 'chess') { chessEngine = new Chess(); chessSelectedSquare = null; return chessEngine.fen(); } 
-    if (type === 'go') return Array(81).fill("");
+    if (type === 'go') {
+        const size = parseInt(document.getElementById('goSizeSelect').value);
+        const handicap = parseInt(document.getElementById('goHandicap').value);
+        let b = Array(size * size).fill("");
+        // 置き石簡易ロジック（盤の中央付近に適当に散らす）
+        if (handicap > 0) {
+            let placed = 0;
+            while(placed < handicap) {
+                let r = Math.floor(Math.random() * (size * size));
+                if(b[r] === "") { b[r] = "X"; placed++; }
+            }
+        }
+        return b;
+    }
+    return Array(9).fill(""); // default
 }
 
 document.getElementById('modeLocalBtn').addEventListener('click', () => { currentMode = 'local'; myRole = 'local'; startLocalGame(); });
@@ -116,16 +144,46 @@ function startLocalGame() {
     document.getElementById('chatArea').classList.add('hidden');
     document.getElementById('matchTitle').textContent = currentMode === 'ai' ? "VS コンピュータ" : "近くの人と対戦";
     myRole = (selectedGame === 'chess' || selectedGame === 'go') && currentMode === 'ai' ? 'X' : myRole; 
-    let state = { board: getInitialBoard(selectedGame), currentPlayer: "X", winner: null, isDraw: false };
+    
+    // 囲碁の置き石がある場合、最初の手番は白(O)
+    let firstPlayer = "X";
+    if (selectedGame === 'go') {
+        const handicap = parseInt(document.getElementById('goHandicap').value);
+        if(handicap > 0) firstPlayer = "O";
+    }
+
+    let state = { 
+        board: getInitialBoard(selectedGame), currentPlayer: firstPlayer, winner: null, isDraw: false,
+        goSize: selectedGame === 'go' ? parseInt(document.getElementById('goSizeSelect').value) : null,
+        captured: { X: 0, O: 0 } // アゲハマ用
+    };
     renderBoard(state);
 }
 
+// オンライン(ランダムマッチ)
 document.getElementById('modeOnlineBtn').addEventListener('click', () => {
     currentMode = 'online'; switchScreen('matchingScreen');
+    document.getElementById('matchingText').textContent = "対戦相手を探しています";
     const myRank = getRank(userData.points[selectedGame]||0).index;
+    
+    let goSize = null, handicap = 0;
+    if(selectedGame === 'go') {
+        goSize = parseInt(document.getElementById('goSizeSelect').value);
+        handicap = parseInt(document.getElementById('goHandicap').value);
+    }
+
     roomsRef.orderByChild('status').equalTo('waiting').once('value', snapshot => {
         const rooms = snapshot.val(); let matchedId = null;
-        if (rooms) { for (let id in rooms) { if (rooms[id].gameType === selectedGame && Math.abs(rooms[id].hostRankIndex - myRank) <= 1) { matchedId = id; break; } } }
+        if (rooms) { 
+            for (let id in rooms) { 
+                const r = rooms[id];
+                if (!r.password && r.gameType === selectedGame && Math.abs(r.hostRankIndex - myRank) <= 1) { 
+                    if(selectedGame === 'go' && r.goSize !== goSize) continue; // 囲碁の場合はサイズが同じ部屋
+                    matchedId = id; break; 
+                } 
+            } 
+        }
+        
         if (matchedId) {
             const p1Id = Object.keys(rooms[matchedId].players)[0];
             const myAssignedRole = Math.random() < 0.5 ? "X" : "O";
@@ -141,8 +199,10 @@ document.getElementById('modeOnlineBtn').addEventListener('click', () => {
             const newRoomRef = roomsRef.push();
             currentRoomId = newRoomRef.key;
             newRoomRef.set({
-                gameType: selectedGame, status: 'waiting', hostRankIndex: myRank,
-                board: getInitialBoard(selectedGame), currentPlayer: "X", winner: null, isDraw: false,
+                gameType: selectedGame, status: 'waiting', hostRankIndex: myRank, password: null,
+                goSize: goSize,
+                board: getInitialBoard(selectedGame), currentPlayer: handicap > 0 ? "O" : "X", winner: null, isDraw: false,
+                captured: { X: 0, O: 0 },
                 players: { [myId]: { name: userData.name, role: "pending" } }
             });
             newRoomRef.onDisconnect().remove();
@@ -150,13 +210,72 @@ document.getElementById('modeOnlineBtn').addEventListener('click', () => {
         }
     });
 });
+
+// プライベートマッチ作成
+document.getElementById('createPrivateRoomBtn').addEventListener('click', () => {
+    const pw = document.getElementById('roomPasswordInput').value.trim();
+    if(!pw) { document.getElementById('privateRoomError').textContent = "合言葉を入力してください"; return; }
+    
+    currentMode = 'online'; switchScreen('matchingScreen');
+    document.getElementById('matchingText').textContent = "接続中... (合言葉: " + pw + ")";
+    
+    let goSize = null, handicap = 0;
+    if(selectedGame === 'go') {
+        goSize = parseInt(document.getElementById('goSizeSelect').value);
+        handicap = parseInt(document.getElementById('goHandicap').value);
+    }
+
+    const newRoomRef = roomsRef.push();
+    currentRoomId = newRoomRef.key;
+    newRoomRef.set({
+        gameType: selectedGame, status: 'waiting', password: pw,
+        goSize: goSize,
+        board: getInitialBoard(selectedGame), currentPlayer: handicap > 0 ? "O" : "X", winner: null, isDraw: false,
+        captured: { X: 0, O: 0 },
+        players: { [myId]: { name: userData.name, role: "pending" } }
+    });
+    newRoomRef.onDisconnect().remove();
+    enterOnlineGame(currentRoomId, "pending");
+});
+
+// プライベートマッチ入室
+document.getElementById('joinPrivateRoomBtn').addEventListener('click', () => {
+    const pw = document.getElementById('roomPasswordInput').value.trim();
+    if(!pw) { document.getElementById('privateRoomError').textContent = "合言葉を入力してください"; return; }
+
+    roomsRef.orderByChild('password').equalTo(pw).once('value', snapshot => {
+        const rooms = snapshot.val();
+        let targetId = null;
+        if (rooms) {
+            for (let id in rooms) {
+                if(rooms[id].status === 'waiting' && rooms[id].gameType === selectedGame) { targetId = id; break; }
+            }
+        }
+        
+        if (targetId) {
+            currentMode = 'online';
+            const p1Id = Object.keys(rooms[targetId].players)[0];
+            const myAssignedRole = Math.random() < 0.5 ? "X" : "O";
+            const p1AssignedRole = myAssignedRole === "X" ? "O" : "X";
+            
+            db.ref(`match_rooms/${targetId}`).update({
+                [`players/${p1Id}/role`]: p1AssignedRole,
+                [`players/${myId}`]: { name: userData.name, role: myAssignedRole },
+                status: 'playing'
+            });
+            enterOnlineGame(targetId, myAssignedRole);
+        } else {
+            document.getElementById('privateRoomError').textContent = "その部屋は存在しません";
+        }
+    });
+});
+
 document.getElementById('cancelMatchBtn').addEventListener('click', () => { if (currentRoomId) db.ref(`match_rooms/${currentRoomId}`).remove(); switchScreen('modeSelectScreen'); });
 
 function leaveGame() {
     if (currentRoomId && currentMode === 'online') { 
         db.ref(`match_rooms/${currentRoomId}`).off('value', gameListener); 
         if (chatListener) db.ref(`match_rooms/${currentRoomId}/chat`).off('value', chatListener);
-        // ここで部屋とチャット履歴が完全に物理削除されます
         if (myRole !== "spectator") db.ref(`match_rooms/${currentRoomId}`).remove(); 
     }
     currentRoomId = null; currentMode = null; myRole = null; chatListener = null;
@@ -175,8 +294,12 @@ function enterOnlineGame(roomId, initialRole) {
             switchScreen('gameScreen');
             if (myRole === "pending") myRole = data.players[myId].role;
             if (selectedGame === 'chess' && chessEngine) chessEngine.load(data.board); 
+            
+            // 状態をグローバルに持たせる(ローカルと統一)
+            window.currentGameState = data;
             renderBoard(data);
-            if (data.winner === myRole && myRole !== "spectator" && !data._pointsAwarded) { 
+            
+            if (data.winner === myRole && myRole !== "spectator" && !data._pointsAwarded && userData.points[selectedGame] !== undefined) { 
                 userData.points[selectedGame] += 50; saveUser(); 
                 db.ref(`match_rooms/${roomId}/_pointsAwarded`).set(true);
             }
@@ -190,13 +313,8 @@ function enterOnlineGame(roomId, initialRole) {
         if (chats) {
             Object.values(chats).forEach(msg => {
                 const div = document.createElement('div');
-                if (msg.sender === 'システム') {
-                    div.className = 'chat-message system';
-                    div.textContent = msg.text;
-                } else {
-                    div.className = 'chat-message';
-                    div.innerHTML = `<strong>${msg.sender}:</strong> ${msg.text}`;
-                }
+                div.className = msg.sender === 'システム' ? 'chat-message system' : 'chat-message';
+                div.innerHTML = msg.sender === 'システム' ? msg.text : `<strong>${msg.sender}:</strong> ${msg.text}`;
                 chatBox.appendChild(div);
             });
             chatBox.scrollTop = chatBox.scrollHeight;
@@ -221,16 +339,63 @@ function getPlayerName(role, gameType) {
     else return role === 'X' ? '✕' : '〇';
 }
 
+// --- 投了・パス機能 ---
+document.getElementById('resignBtn').addEventListener('click', () => {
+    let state = window.currentGameState;
+    if(!state || state.winner) return;
+    
+    // 自分がXならOの勝ち。ローカルなら現在のプレイヤーの負け。
+    let loser = myRole;
+    if(currentMode === 'local' || myRole === 'spectator') loser = state.currentPlayer;
+    state.winner = loser === 'X' ? 'O' : 'X';
+    
+    if (currentMode === 'online') {
+        db.ref(`match_rooms/${currentRoomId}/chat`).push({ sender: 'システム', text: `【 ${getPlayerName(loser, selectedGame)} 】が投了しました。` });
+    }
+    syncGameState(state, state.board);
+});
+
+document.getElementById('passBtn').addEventListener('click', () => {
+    let state = window.currentGameState;
+    if(!state || state.winner || selectedGame !== 'go') return;
+    if(currentMode === 'online' && myRole !== state.currentPlayer) return;
+
+    if (currentMode === 'online') {
+        db.ref(`match_rooms/${currentRoomId}/chat`).push({ sender: 'システム', text: `【 ${getPlayerName(state.currentPlayer, selectedGame)} 】がパスしました。` });
+    }
+    state.currentPlayer = state.currentPlayer === "X" ? "O" : "X";
+    syncGameState(state, state.board);
+});
+
 // --- 描画エンジン ---
 const chessPieces = { 'p':'♟', 'n':'♞', 'b':'♝', 'r':'♜', 'q':'♛', 'k':'♚', 'P':'♙', 'N':'♘', 'B':'♗', 'R':'♖', 'Q':'♕', 'K':'♔' };
 
 function renderBoard(gameState) {
+    window.currentGameState = gameState; // 状態保持
     const boardElement = document.getElementById('board');
     boardElement.className = `board ${selectedGame}`;
     boardElement.innerHTML = '';
     
     const isMyTurn = (currentMode === 'local') || (myRole === gameState.currentPlayer);
     
+    // UI出し分け
+    document.getElementById('resignBtn').classList.toggle('hidden', gameState.winner != null);
+    document.getElementById('passBtn').classList.toggle('hidden', selectedGame !== 'go' || gameState.winner != null || !isMyTurn);
+    
+    if(selectedGame === 'go') {
+        document.getElementById('goCapturedDisplay').classList.remove('hidden');
+        document.getElementById('capBlack').textContent = gameState.captured ? gameState.captured.X : 0;
+        document.getElementById('capWhite').textContent = gameState.captured ? gameState.captured.O : 0;
+        const s = gameState.goSize || 9;
+        const cellSize = s === 19 ? 22 : (s === 13 ? 30 : 40);
+        boardElement.style.gridTemplateColumns = `repeat(${s}, ${cellSize}px)`;
+        boardElement.style.gridTemplateRows = `repeat(${s}, ${cellSize}px)`;
+    } else {
+        document.getElementById('goCapturedDisplay').classList.add('hidden');
+        boardElement.style.gridTemplateColumns = "";
+        boardElement.style.gridTemplateRows = "";
+    }
+
     if (selectedGame === 'chess') {
         const board2D = chessEngine.board(); 
         let validMoves = [];
@@ -342,12 +507,23 @@ function handleCellClick(idx, gameState) {
         let newBoard = [...gameState.board];
         newBoard[idx] = gameState.currentPlayer;
         const opp = gameState.currentPlayer === "X" ? "O" : "X";
-        let captured = false;
-        for (let i = 0; i < 81; i++) {
-            if (newBoard[i] === opp && getLiberties(newBoard, i, opp) === 0) { removeGroup(newBoard, i, opp); captured = true; }
+        const size = gameState.goSize || 9;
+        let capturedCount = 0;
+        
+        // 相手の石を囲んだら取る
+        for (let i = 0; i < size * size; i++) {
+            if (newBoard[i] === opp && getLiberties(newBoard, i, opp, size) === 0) { 
+                capturedCount += removeGroup(newBoard, i, opp, size); 
+            }
         }
-        if (!captured && getLiberties(newBoard, idx, gameState.currentPlayer) === 0) return; 
+        // 自殺手防止
+        if (capturedCount === 0 && getLiberties(newBoard, idx, gameState.currentPlayer, size) === 0) return; 
+        
         gameState.board = newBoard;
+        if(capturedCount > 0) {
+            if(!gameState.captured) gameState.captured = { X: 0, O: 0 };
+            gameState.captured[gameState.currentPlayer] += capturedCount;
+        }
     } else {
         gameState.board[idx] = gameState.currentPlayer;
     }
@@ -356,54 +532,54 @@ function handleCellClick(idx, gameState) {
     syncGameState(gameState, gameState.board);
 }
 
-// 🌟 パス判定と終了判定を完全修正
 function syncGameState(gameState, newBoardData) {
-    gameState.board = newBoardData;
-    let nextPlayer = gameState.currentPlayer === "X" ? "O" : "X";
+    // 投了などで winner が既に決まっている場合は飛ばす
+    if(!gameState.winner && !gameState.isDraw) {
+        gameState.board = newBoardData;
+        let nextPlayer = gameState.currentPlayer === "X" ? "O" : "X";
 
-    if (selectedGame === 'chess') {
-        if (chessEngine.in_checkmate()) gameState.winner = gameState.currentPlayer;
-        else if (chessEngine.in_draw()) gameState.isDraw = true;
-        gameState.currentPlayer = nextPlayer;
-    } else if (selectedGame === 'tictactoe') {
-        const wp = [[0,1,2], [3,4,5], [6,7,8], [0,3,6], [1,4,7], [2,5,8], [0,4,8], [2,4,6]];
-        for (let p of wp) if (gameState.board[p[0]] && gameState.board[p[0]] === gameState.board[p[1]] && gameState.board[p[0]] === gameState.board[p[2]]) gameState.winner = gameState.board[p[0]];
-        if (!gameState.winner && !gameState.board.includes("")) gameState.isDraw = true;
-        gameState.currentPlayer = nextPlayer;
-    } else if (selectedGame === 'othello') {
-        // オセロ専用のパス＆終了判定ロジック
-        const xCnt = gameState.board.filter(c => c === "X").length;
-        const oCnt = gameState.board.filter(c => c === "O").length;
-        const nextHasMoves = hasOthelloValidMoves(gameState.board, nextPlayer);
-        const currentHasMoves = hasOthelloValidMoves(gameState.board, gameState.currentPlayer);
+        if (selectedGame === 'chess') {
+            if (chessEngine.in_checkmate()) gameState.winner = gameState.currentPlayer;
+            else if (chessEngine.in_draw()) gameState.isDraw = true;
+            gameState.currentPlayer = nextPlayer;
+        } else if (selectedGame === 'tictactoe') {
+            const wp = [[0,1,2], [3,4,5], [6,7,8], [0,3,6], [1,4,7], [2,5,8], [0,4,8], [2,4,6]];
+            for (let p of wp) if (gameState.board[p[0]] && gameState.board[p[0]] === gameState.board[p[1]] && gameState.board[p[0]] === gameState.board[p[2]]) gameState.winner = gameState.board[p[0]];
+            if (!gameState.winner && !gameState.board.includes("")) gameState.isDraw = true;
+            gameState.currentPlayer = nextPlayer;
+        } else if (selectedGame === 'othello') {
+            const xCnt = gameState.board.filter(c => c === "X").length;
+            const oCnt = gameState.board.filter(c => c === "O").length;
+            const nextHasMoves = hasOthelloValidMoves(gameState.board, nextPlayer);
+            const currentHasMoves = hasOthelloValidMoves(gameState.board, gameState.currentPlayer);
 
-        if (!gameState.board.includes("") || xCnt === 0 || oCnt === 0 || (!nextHasMoves && !currentHasMoves)) {
-            // 両者置けない、または盤面が埋まった場合はゲーム終了
-            gameState.winner = xCnt > oCnt ? "X" : (oCnt > xCnt ? "O" : null);
-            if (xCnt === oCnt) gameState.isDraw = true;
-            gameState.currentPlayer = nextPlayer; 
-        } else {
-            if (nextHasMoves) {
-                gameState.currentPlayer = nextPlayer;
+            if (!gameState.board.includes("") || xCnt === 0 || oCnt === 0 || (!nextHasMoves && !currentHasMoves)) {
+                gameState.winner = xCnt > oCnt ? "X" : (oCnt > xCnt ? "O" : null);
+                if (xCnt === oCnt) gameState.isDraw = true;
+                gameState.currentPlayer = nextPlayer; 
             } else {
-                // 次のプレイヤーが置けない場合はパス（ターンを変えない）
-                if (currentMode === 'online') {
-                    db.ref(`match_rooms/${currentRoomId}/chat`).push({ 
-                        sender: 'システム', 
-                        text: `【 ${getPlayerName(nextPlayer, selectedGame)} 】は置ける場所がないためパスしました。` 
-                    });
+                if (nextHasMoves) {
+                    gameState.currentPlayer = nextPlayer;
+                } else {
+                    if (currentMode === 'online') {
+                        db.ref(`match_rooms/${currentRoomId}/chat`).push({ 
+                            sender: 'システム', 
+                            text: `【 ${getPlayerName(nextPlayer, selectedGame)} 】は置ける場所がないためパスしました。` 
+                        });
+                    }
                 }
             }
+        } else if (selectedGame === 'go') {
+            gameState.currentPlayer = nextPlayer;
         }
-    } else if (selectedGame === 'go') {
-        gameState.currentPlayer = nextPlayer;
     }
 
     const updateData = {
         board: gameState.board,
         currentPlayer: gameState.currentPlayer,
         winner: gameState.winner || null,
-        isDraw: gameState.isDraw || false
+        isDraw: gameState.isDraw || false,
+        captured: gameState.captured || { X: 0, O: 0 }
     };
 
     if (currentMode === 'online') {
@@ -411,7 +587,7 @@ function syncGameState(gameState, newBoardData) {
     } else {
         renderBoard(gameState);
         if (currentMode === 'ai' && !gameState.winner && !gameState.isDraw && gameState.currentPlayer === 'O') setTimeout(() => playAI(gameState), 800);
-        if (currentMode === 'ai' && gameState.winner === 'X') { userData.points[selectedGame] += 50; saveUser(); }
+        if (currentMode === 'ai' && gameState.winner === 'X' && userData.points[selectedGame] !== undefined) { userData.points[selectedGame] += 50; saveUser(); }
     }
 }
 
@@ -427,7 +603,14 @@ function playAI(gameState) {
     }
 
     let emptySpots = gameState.board.map((v, i) => v === "" ? i : null).filter(v => v !== null);
-    if (emptySpots.length === 0) return;
+    if (emptySpots.length === 0) {
+        if(selectedGame === 'go') {
+            // 置く場所がない場合AIはパス
+            gameState.currentPlayer = "X";
+            syncGameState(gameState, gameState.board);
+        }
+        return;
+    }
     
     let moveIdx = -1;
     if (selectedGame === 'othello') {
@@ -438,13 +621,32 @@ function playAI(gameState) {
             gameState.board[moveIdx] = "O";
         }
     } else if (selectedGame === 'go') {
+        const size = gameState.goSize || 9;
         for(let i=0; i<50; i++) {
             let r = emptySpots[Math.floor(Math.random() * emptySpots.length)];
             let test = [...gameState.board]; test[r] = "O";
-            if (getLiberties(test, r, "O") > 0) { moveIdx = r; break; }
+            if (getLiberties(test, r, "O", size) > 0) { moveIdx = r; break; }
         }
         if(moveIdx !== -1) {
-            let nb = [...gameState.board]; nb[moveIdx] = "O"; gameState.board = nb;
+            let nb = [...gameState.board]; nb[moveIdx] = "O"; 
+            
+            // 相手石を取る処理(AI)
+            let capturedCount = 0;
+            for (let i = 0; i < size * size; i++) {
+                if (nb[i] === "X" && getLiberties(nb, i, "X", size) === 0) { 
+                    capturedCount += removeGroup(nb, i, "X", size); 
+                }
+            }
+            if(capturedCount > 0) {
+                if(!gameState.captured) gameState.captured = { X: 0, O: 0 };
+                gameState.captured["O"] += capturedCount;
+            }
+            gameState.board = nb;
+        } else {
+             // パス
+            gameState.currentPlayer = "X";
+            syncGameState(gameState, gameState.board);
+            return;
         }
     } else {
         moveIdx = emptySpots[Math.floor(Math.random() * emptySpots.length)];
@@ -479,25 +681,30 @@ function getOthelloFlipped(board, index, player) {
     } return flipped;
 }
 
-function getLiberties(board, idx, player, visited = new Set()) {
+function getLiberties(board, idx, player, size = 9, visited = new Set()) {
     if (visited.has(idx)) return 0; visited.add(idx);
-    const x = idx % 9, y = Math.floor(idx / 9); let lib = 0;
+    const x = idx % size, y = Math.floor(idx / size); let lib = 0;
     const dirs = [[0,-1],[0,1],[-1,0],[1,0]];
     for (let [dx, dy] of dirs) {
         let nx = x + dx, ny = y + dy;
-        if (nx >= 0 && nx < 9 && ny >= 0 && ny < 9) {
-            let nIdx = ny * 9 + nx;
+        if (nx >= 0 && nx < size && ny >= 0 && ny < size) {
+            let nIdx = ny * size + nx;
             if (board[nIdx] === "") lib++;
-            else if (board[nIdx] === player) lib += getLiberties(board, nIdx, player, visited);
+            else if (board[nIdx] === player) lib += getLiberties(board, nIdx, player, size, visited);
         }
     } return lib;
 }
-function removeGroup(board, idx, player, visited = new Set()) {
-    if (visited.has(idx) || board[idx] !== player) return;
+
+function removeGroup(board, idx, player, size = 9, visited = new Set()) {
+    if (visited.has(idx) || board[idx] !== player) return 0;
     visited.add(idx); board[idx] = "";
-    const x = idx % 9, y = Math.floor(idx / 9); const dirs = [[0,-1],[0,1],[-1,0],[1,0]];
+    let removedCount = 1;
+    const x = idx % size, y = Math.floor(idx / size); const dirs = [[0,-1],[0,1],[-1,0],[1,0]];
     for (let [dx, dy] of dirs) {
         let nx = x + dx, ny = y + dy;
-        if (nx >= 0 && nx < 9 && ny >= 0 && ny < 9) removeGroup(board, ny * 9 + nx, player, visited);
+        if (nx >= 0 && nx < size && ny >= 0 && ny < size) {
+            removedCount += removeGroup(board, ny * size + nx, player, size, visited);
+        }
     }
+    return removedCount;
 }
